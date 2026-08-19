@@ -1,3 +1,5 @@
 python-dotenv>=1.0,<2
+google-auth>=2.0,<3
+requests>=2.31,<3
 slack-bolt>=1.20,<2
 slack-sdk>=3.27,<4

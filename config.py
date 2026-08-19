@@ -34,6 +34,8 @@ class Settings:
     gmail_client_id: str
     gmail_client_secret: str
     gmail_refresh_token: str
+    google_sheets_link: str
+    google_service_account_file: Path
 
 
 def load_settings() -> Settings:
@@ -59,4 +61,10 @@ def load_settings() -> Settings:
         gmail_client_id=os.getenv("CLIENT_ID", "").strip(),
         gmail_client_secret=os.getenv("CLIENT_SECRET", "").strip(),
         gmail_refresh_token=os.getenv("REFRESH_TOKEN", "").strip(),
+        google_sheets_link=os.getenv("GOOGLE_SHEETS_LINK", "").strip(),
+        google_service_account_file=BASE_DIR
+        / os.getenv(
+            "GOOGLE_SERVICE_ACCOUNT_FILE",
+            "credentials/google-service-account.json",
+        ).strip(),
     )
