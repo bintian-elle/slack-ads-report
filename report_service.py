@@ -3,7 +3,7 @@
 import csv
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -25,7 +25,7 @@ class ChannelMetrics:
     name: str
     spend: Decimal
     revenue: Decimal
-    add_to_cart: int = 0
+    add_to_cart: Decimal = Decimal("0")
 
     @property
     def roas(self) -> Decimal:
@@ -39,127 +39,17 @@ def calculate_roas(revenue: Decimal, spend: Decimal) -> Decimal:
     return revenue / spend
 
 
-def _read_google_ads_csv(csv_path: Path) -> Tuple[date, List[ChannelMetrics]]:
-    """Read a Google Ads CSV that may contain report metadata above its header."""
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as csv_file:
-        lines = csv_file.readlines()
-
-    header_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if line.strip().startswith("Day,Campaign type,")
-        ),
-        None,
-    )
-    if header_index is None:
-        raise ValueError(f"Could not find a Google Ads header in {csv_path.name}.")
-
-    rows = csv.DictReader(lines[header_index:])
-    report_date = None
-    metrics: List[ChannelMetrics] = []
-
-    for row in rows:
-        if not row.get("Day") or not row.get("Campaign type"):
-            continue
-
-        row_date = datetime.strptime(row["Day"].strip(), "%Y-%m-%d").date()
-        report_date = report_date or row_date
-        if row_date != report_date:
-            raise ValueError(f"{csv_path.name} contains more than one report date.")
-
-        spend = Decimal(row["Cost"].replace(",", "").strip())
-        roas = Decimal(row["ROAS"].replace(",", "").strip() or "0")
-        campaign_type = row["Campaign type"].strip()
-        metrics.append(
-            ChannelMetrics(
-                name=CAMPAIGN_TYPE_NAMES.get(campaign_type, campaign_type),
-                spend=spend,
-                revenue=spend * roas,
-            )
-        )
-
-    if report_date is None or not metrics:
-        raise ValueError(f"No advertising rows were found in {csv_path.name}.")
-
-    return report_date, metrics
-
-
-def _date_from_filename(csv_path: Path) -> date:
-    """Extract the last ISO date from a provider-generated filename."""
-    matches = re.findall(r"\d{4}-\d{2}-\d{2}", csv_path.name)
-    if not matches:
-        raise ValueError(f"Could not determine a report date from {csv_path.name}.")
-    return datetime.strptime(matches[-1], "%Y-%m-%d").date()
-
-
-def _read_reddit_ads_csv(csv_path: Path) -> Tuple[date, List[ChannelMetrics]]:
-    """Aggregate Reddit ad-level spend and purchase ROAS into one channel row."""
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as csv_file:
-        rows = csv.DictReader(csv_file)
-        fieldnames = rows.fieldnames or []
-        spend_column = "Amount Spent (USD)"
-        roas_column = "Purchase ROAS (Return on Ad Spend)"
-        if spend_column not in fieldnames or roas_column not in fieldnames:
-            raise ValueError(f"Could not find Reddit Ads columns in {csv_path.name}.")
-
-        total_spend = Decimal("0")
-        total_revenue = Decimal("0")
-        for row in rows:
-            spend_value = (row.get(spend_column) or "").replace(",", "").strip()
-            if not spend_value:
-                continue
-            spend = Decimal(spend_value)
-            roas = Decimal(
-                (row.get(roas_column) or "0").replace(",", "").strip() or "0"
-            )
-            total_spend += spend
-            total_revenue += spend * roas
-
-    return _date_from_filename(csv_path), [
-        ChannelMetrics(name="Reddit", spend=total_spend, revenue=total_revenue)
-    ]
-
-
-def read_raw_csv(csv_path: Path) -> Tuple[date, List[ChannelMetrics]]:
-    """Detect the provider from CSV headers and parse it without renaming."""
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as csv_file:
-        preview = "".join(csv_file.readlines()[:5])
-
-    if "Day,Campaign type,Currency code,Cost,ROAS" in preview:
-        return _read_google_ads_csv(csv_path)
-    if "Amount Spent (USD)" in preview and "Purchase ROAS" in preview:
-        return _read_reddit_ads_csv(csv_path)
-    raise ValueError(f"Unsupported raw CSV format: {csv_path.name}")
-
-
-def process_csv_files(
-    csv_paths: Iterable[Path],
-) -> Tuple[date, List[ChannelMetrics]]:
-    """Convert Google Ads CSV files into a date and normalized channel metrics."""
-    paths = list(csv_paths)
-    if not paths:
-        raise ValueError("No CSV files were provided for report processing.")
-
-    report_date = None
-    all_metrics: List[ChannelMetrics] = []
-    for csv_path in paths:
-        file_date, metrics = read_raw_csv(csv_path)
-        report_date = report_date or file_date
-        if file_date != report_date:
-            raise ValueError("All CSV files must belong to the same report date.")
-        all_metrics.extend(metrics)
-
-    return report_date, all_metrics
-
-
 def _aggregate_metrics(metrics: Iterable[ChannelMetrics]) -> List[ChannelMetrics]:
     """Combine rows that belong to the same advertising channel."""
     totals: Dict[str, Dict[str, object]] = {}
     for row in metrics:
         channel = totals.setdefault(
             row.name,
-            {"spend": Decimal("0"), "revenue": Decimal("0"), "add_to_cart": 0},
+            {
+                "spend": Decimal("0"),
+                "revenue": Decimal("0"),
+                "add_to_cart": Decimal("0"),
+            },
         )
         channel["spend"] += row.spend
         channel["revenue"] += row.revenue
@@ -176,6 +66,37 @@ def _aggregate_metrics(metrics: Iterable[ChannelMetrics]) -> List[ChannelMetrics
     ]
 
 
+def cleanup_processed_reports(
+    processed_dir: Path,
+    retention_days: int = 7,
+) -> List[Path]:
+    """Keep daily processed CSVs for the latest retention window."""
+    if retention_days < 1:
+        raise ValueError("retention_days must be at least 1.")
+
+    dated_paths = []
+    for path in processed_dir.glob("daily_report_*.csv"):
+        match = re.fullmatch(r"daily_report_(\d{4}-\d{2}-\d{2})\.csv", path.name)
+        if not match:
+            continue
+        try:
+            report_date = date.fromisoformat(match.group(1))
+        except ValueError:
+            continue
+        dated_paths.append((report_date, path))
+    if not dated_paths:
+        return []
+
+    newest_date = max(report_date for report_date, _ in dated_paths)
+    cutoff = newest_date - timedelta(days=retention_days - 1)
+    removed = []
+    for report_date, path in dated_paths:
+        if report_date < cutoff:
+            path.unlink()
+            removed.append(path)
+    return removed
+
+
 def save_processed_csv(
     output_path: Path,
     report_date: date,
@@ -183,8 +104,34 @@ def save_processed_csv(
 ) -> None:
     """Save one daily summary row as clean tabular data without Slack markup."""
     rows = _aggregate_metrics(metrics)
+    special_rows = {
+        row.name: row
+        for row in rows
+        if row.name in {"Shopify", "RO system"}
+    }
+    rows = [row for row in rows if row.name not in special_rows]
+
+    # The daily report presents Video and Demand Gen as one Google DG line.
+    google_dg_rows = [
+        row for row in rows if row.name in {"Google Video", "Google DG"}
+    ]
+    if google_dg_rows:
+        rows = [
+            row for row in rows if row.name not in {"Google Video", "Google DG"}
+        ]
+        rows.append(
+            ChannelMetrics(
+                name="Google DG",
+                spend=sum((row.spend for row in google_dg_rows), Decimal("0")),
+                revenue=sum((row.revenue for row in google_dg_rows), Decimal("0")),
+            )
+        )
     total_spend = sum((row.spend for row in rows), Decimal("0"))
-    total_revenue = sum((row.revenue for row in rows), Decimal("0"))
+    total_revenue = (
+        special_rows["Shopify"].revenue
+        if "Shopify" in special_rows
+        else sum((row.revenue for row in rows), Decimal("0"))
+    )
 
     record = {
         "Date": report_date.isoformat(),
@@ -192,13 +139,44 @@ def save_processed_csv(
         "Total Revenue": f"{total_revenue:.2f}",
         "Total ROAS": f"{calculate_roas(total_revenue, total_spend):.2f}",
     }
-    for row in rows:
+    if "Shopify" in special_rows:
+        record["Shopify Total Revenue"] = f"{special_rows['Shopify'].revenue:.2f}"
+    if "RO system" in special_rows:
+        record["RO system Revenue"] = f"{special_rows['RO system'].revenue:.2f}"
+    row_by_name = {row.name: row for row in rows}
+    preferred_order = (
+        "Pmax",
+        "Google Search",
+        "Shopping",
+        "Meta",
+        "Bing",
+        "Engagement",
+        "Google DG",
+        "TikTok",
+        "Reddit",
+    )
+    ordered_rows = [
+        row_by_name[name] for name in preferred_order if name in row_by_name
+    ]
+    ordered_rows.extend(row for row in rows if row.name not in preferred_order)
+
+    for row in ordered_rows:
         record[f"{row.name} Spend"] = f"{row.spend:.2f}"
-        record[f"{row.name} ROAS"] = f"{row.roas:.2f}"
-        # Reddit reporting only needs Spend and ROAS in the processed output.
-        if row.name != "Reddit":
-            record[f"{row.name} Revenue"] = f"{row.revenue:.2f}"
+        if row.name != "Engagement":
+            record[f"{row.name} ROAS"] = f"{row.roas:.2f}"
+        if row.name == "Meta" and row.add_to_cart:
             record[f"{row.name} ATC"] = str(row.add_to_cart)
+
+    google_rows = [
+        row
+        for row in rows
+        if row.name in {"Pmax", "Google Search", "Shopping", "Google DG"}
+    ]
+    if google_rows:
+        google_spend = sum((row.spend for row in google_rows), Decimal("0"))
+        google_revenue = sum((row.revenue for row in google_rows), Decimal("0"))
+        record["Google Ads Spend"] = f"{google_spend:.2f}"
+        record["Google Ads ROAS"] = f"{calculate_roas(google_revenue, google_spend):.2f}"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8", newline="") as csv_file:
@@ -218,12 +196,29 @@ def load_processed_csv(csv_path: Path) -> Tuple[date, List[ChannelMetrics]]:
     channel_names = [
         column[: -len(" Spend")]
         for column in record
-        if column.endswith(" Spend") and column != "Total Spend"
+        if column.endswith(" Spend")
+        and column not in {"Total Spend", "Google Ads Spend"}
     ]
     metrics = []
+    if record.get("Shopify Total Revenue"):
+        metrics.append(
+            ChannelMetrics(
+                name="Shopify",
+                spend=Decimal("0"),
+                revenue=Decimal(record["Shopify Total Revenue"]),
+            )
+        )
+    if record.get("RO system Revenue"):
+        metrics.append(
+            ChannelMetrics(
+                name="RO system",
+                spend=Decimal("0"),
+                revenue=Decimal(record["RO system Revenue"]),
+            )
+        )
     for name in channel_names:
         spend = Decimal(record[f"{name} Spend"] or "0")
-        if name == "Reddit" and f"{name} Revenue" not in record:
+        if f"{name} Revenue" not in record:
             roas = Decimal(record.get(f"{name} ROAS", "0") or "0")
             revenue = spend * roas
         else:
@@ -233,7 +228,7 @@ def load_processed_csv(csv_path: Path) -> Tuple[date, List[ChannelMetrics]]:
                 name=name,
                 spend=spend,
                 revenue=revenue,
-                add_to_cart=int(record.get(f"{name} ATC", "0") or "0"),
+                add_to_cart=Decimal(record.get(f"{name} ATC", "0") or "0"),
             )
         )
     return report_date, metrics
@@ -243,26 +238,135 @@ def format_slack_report(
     report_date: date,
     metrics: Iterable[ChannelMetrics],
 ) -> str:
-    """Format normalized metrics as a Slack-friendly daily report."""
+    """Format normalized metrics using the fixed Slack daily report template."""
     rows = _aggregate_metrics(metrics)
-    total_spend = sum((row.spend for row in rows), Decimal("0"))
-    total_revenue = sum((row.revenue for row in rows), Decimal("0"))
-    total_roas = calculate_roas(total_revenue, total_spend)
+    row_by_name = {row.name: row for row in rows}
+
+    dg_rows = [
+        row_by_name[name]
+        for name in ("Google Video", "Google DG")
+        if name in row_by_name
+    ]
+    if dg_rows:
+        dg_spend = sum((row.spend for row in dg_rows), Decimal("0"))
+        dg_revenue = sum((row.revenue for row in dg_rows), Decimal("0"))
+        row_by_name["Google DG"] = ChannelMetrics(
+            name="Google DG",
+            spend=dg_spend,
+            revenue=dg_revenue,
+        )
+
+    def currency(value: Decimal) -> str:
+        return f"${value:,.2f}"
+
+    def spend_roas_line(label: str, channel_name: str) -> str:
+        row = row_by_name.get(channel_name)
+        if row is None:
+            return f"• *{label} Spend:* - | *ROAS:* -"
+        return (
+            f"• *{label} Spend:* {currency(row.spend)} | "
+            f"*ROAS:* {row.roas:.2f}"
+        )
+
+    required_spend_channels = {
+        "Pmax",
+        "Google Search",
+        "Shopping",
+        "Meta",
+        "Bing",
+        "Engagement",
+        "Google DG",
+        "Reddit",
+    }
+    has_complete_spend = required_spend_channels.issubset(row_by_name)
+    if has_complete_spend:
+        total_spend = (
+            sum(
+                (row_by_name[name].spend for name in required_spend_channels),
+                Decimal("0"),
+            )
+        )
+        total_spend_text = currency(total_spend)
+    else:
+        total_spend_text = "-"
+
+    shopify = row_by_name.get("Shopify")
+    total_revenue_text = currency(shopify.revenue) if shopify else "-"
+    total_roas_text = (
+        f"{calculate_roas(shopify.revenue, total_spend):.2f}"
+        if shopify and has_complete_spend
+        else "-"
+    )
+    ro_system = row_by_name.get("RO system")
+    ro_system_text = currency(ro_system.revenue) if ro_system else "-"
+
+    meta = row_by_name.get("Meta")
+    if meta is None:
+        meta_line = "• *Meta Spend:* - | *ROAS:* - | *ATC:* -"
+    else:
+        meta_line = (
+            f"• *Meta Spend:* {currency(meta.spend)} | *ROAS:* {meta.roas:.2f} | "
+            f"*ATC:* ${meta.add_to_cart:,.2f}"
+        )
+
+    engagement = row_by_name.get("Engagement")
+    engagement_text = currency(engagement.spend) if engagement else "-"
+
+    reddit = row_by_name.get("Reddit")
+    if reddit is None:
+        reddit_line = "• *Reddit Spend:* - | *Reddit ROAS:* -"
+    else:
+        reddit_line = (
+            f"• *Reddit Spend:* {currency(reddit.spend)} | "
+            f"*Reddit ROAS:* {reddit.roas:.2f}"
+        )
+
+    google_rows = [
+        row_by_name[name]
+        for name in (
+            "Pmax",
+            "Google Search",
+            "Shopping",
+            "Google Video",
+            "Google DG",
+        )
+        if name in row_by_name
+    ]
+    # Avoid double counting Video after it has been combined into Google DG.
+    if "Google Video" in row_by_name and "Google DG" in row_by_name:
+        google_rows = [
+            row
+            for row in google_rows
+            if row.name != "Google Video"
+        ]
+    if google_rows:
+        google_spend = sum((row.spend for row in google_rows), Decimal("0"))
+        google_revenue = sum((row.revenue for row in google_rows), Decimal("0"))
+        google_line = (
+            f"• *google ads spend:* {currency(google_spend)} | "
+            f"*google ads ROAS:* "
+            f"{calculate_roas(google_revenue, google_spend):.2f}"
+        )
+    else:
+        google_line = "• *google ads spend:* - | *google ads ROAS:* -"
 
     lines = [
         f"📊 *Bluevua Daily Report {report_date:%m/%d}*",
         (
-            f"*Total Spend:* ${total_spend:,.2f} | "
-            f"*Total Revenue:* ${total_revenue:,.2f} | "
-            f"*ROAS:* {total_roas:.2f}"
+            f"*Total Spend:* {total_spend_text} | "
+            f"*Total Revenue:* {total_revenue_text} | *ROAS:* {total_roas_text}"
         ),
         "--------------------------------------------------",
+        f"• *RO system Revenue:* {ro_system_text}",
+        spend_roas_line("Pmax", "Pmax"),
+        spend_roas_line("Google Search", "Google Search"),
+        spend_roas_line("Shopping", "Shopping"),
+        meta_line,
+        spend_roas_line("Bing", "Bing"),
+        f"• *Engagement:* {engagement_text}",
+        spend_roas_line("Google DG", "Google DG"),
+        spend_roas_line("TikTok", "TikTok"),
+        reddit_line,
+        google_line,
     ]
-
-    for row in rows:
-        line = f"• *{row.name} Spend:* ${row.spend:,.2f} | *ROAS:* {row.roas:.2f}"
-        if row.add_to_cart:
-            line += f" | *ATC:* {row.add_to_cart}"
-        lines.append(line)
-
     return "\n".join(lines)

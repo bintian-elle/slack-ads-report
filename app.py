@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 from datetime import date, datetime, time as datetime_time
+from decimal import Decimal
 from pathlib import Path
 from typing import Iterable, Optional
 from zoneinfo import ZoneInfo
@@ -12,16 +13,21 @@ from zoneinfo import ZoneInfo
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
+from bing_service import BingAdsService
 from config import load_settings
-from gmail_service import GmailService
+from google_sheets_service import GoogleSheetsService
+from google_ads_sheet_service import GoogleAdsSheetService
+from meta_service import MetaAdsService
 from report_service import (
+    ChannelMetrics,
+    cleanup_processed_reports,
     format_slack_report,
     load_processed_csv,
-    process_csv_files,
-    read_raw_csv,
     save_processed_csv,
 )
+from reddit_service import RedditAdsService
 from slack_service import SlackService
+from shopify_service import ShopifyService
 
 
 logging.basicConfig(
@@ -33,62 +39,105 @@ logging.basicConfig(
 settings = load_settings()
 
 
-def fetch_latest_gmail_report() -> Path:
-    """Download the newest Google Ads report linked from Gmail."""
-    gmail = GmailService(
-        client_id=settings.gmail_client_id,
-        client_secret=settings.gmail_client_secret,
-        refresh_token=settings.gmail_refresh_token,
-        download_dir=settings.raw_data_dir,
+def fetch_google_ads_metrics(
+    report_date: date = None,
+) -> tuple:
+    """Read one Google Ads Script date directly into normalized metrics."""
+    sheets = GoogleAdsSheetService(
+        spreadsheet_link=settings.google_sheets_raw,
+        credentials_file=settings.google_service_account_file,
+        raw_tab_name=settings.google_ads_raw_tab,
     )
-    expected_email_date = datetime.now(
-        ZoneInfo(settings.report_timezone)
-    ).date()
-    output_path = gmail.download_latest_report(
-        expected_email_date=expected_email_date,
+    selected_date, metrics = sheets.fetch_daily_metrics(report_date=report_date)
+    logging.info(
+        "Google Ads Raw loaded directly for %s: %s channels",
+        selected_date,
+        len(metrics),
     )
-    logging.info("Gmail report saved to %s", output_path)
-    return output_path
+    return selected_date, metrics
 
 
 def generate_daily_report(
-    csv_paths: Optional[Iterable[Path]] = None,
+    report_date: date,
+    metrics: Iterable[ChannelMetrics],
     channel_ids=None,
     send_to_slack=False,
 ) -> Path:
-    """Process raw CSV files, save the report, and optionally send it to Slack."""
-    selected_paths = list(csv_paths or [])
-    if not selected_paths:
-        dated_paths = []
-        for raw_path in settings.raw_data_dir.glob("*.csv"):
-            try:
-                raw_date, _ = read_raw_csv(raw_path)
-                dated_paths.append((raw_date, raw_path))
-            except ValueError as error:
-                logging.warning("Skipping %s: %s", raw_path.name, error)
-
-        if not dated_paths:
-            raise FileNotFoundError(
-                "No raw CSV was found. Run: python app.py --fetch-gmail"
-            )
-        latest_date = max(raw_date for raw_date, _ in dated_paths)
-        selected_paths = [
-            raw_path for raw_date, raw_path in dated_paths if raw_date == latest_date
-        ]
-        logging.info(
-            "Processing %s raw files for %s: %s",
-            len(selected_paths),
-            latest_date,
-            ", ".join(path.name for path in selected_paths),
+    """Enrich normalized metrics, save the report, and optionally send Slack."""
+    metrics = list(metrics)
+    if not any(metric.name == "Reddit" for metric in metrics):
+        reddit = RedditAdsService(settings.reddit_credentials_file)
+        reddit_metrics = reddit.fetch_daily_metrics(
+            report_date=report_date,
         )
-
-    report_date, metrics = process_csv_files(selected_paths)
+        metrics.append(reddit_metrics)
+        logging.info(
+            "Reddit report loaded for %s: spend=%s roas=%.2f",
+            report_date,
+            reddit_metrics.spend,
+            reddit_metrics.roas,
+        )
+    if not any(metric.name == "Bing" for metric in metrics):
+        bing = BingAdsService(
+            client_id=settings.bing_google_client_id,
+            client_secret=settings.bing_google_client_secret,
+            refresh_token=settings.bing_google_refresh_token,
+            developer_token=settings.bing_developer_token,
+        )
+        bing_metrics = bing.fetch_daily_metrics(report_date)
+        metrics.append(bing_metrics)
+        logging.info(
+            "Bing report loaded for %s: spend=%s roas=%.2f",
+            report_date,
+            bing_metrics.spend,
+            bing_metrics.roas,
+        )
+    if not any(metric.name == "Meta" for metric in metrics):
+        meta = MetaAdsService(
+            access_token=settings.meta_access_token,
+            ad_account_id=settings.meta_ad_account_id,
+        )
+        meta_metrics, engagement_metrics = meta.fetch_daily_metrics(report_date)
+        metrics.extend((meta_metrics, engagement_metrics))
+        logging.info(
+            "Meta report loaded for %s: spend=%s roas=%.2f atc=%s engagement=%s",
+            report_date,
+            meta_metrics.spend,
+            meta_metrics.roas,
+            meta_metrics.add_to_cart,
+            engagement_metrics.spend,
+        )
+    if not any(metric.name == "Shopify" for metric in metrics):
+        shopify = ShopifyService(
+            store=settings.shopify_store,
+            client_id=settings.shopify_client_id,
+            client_secret=settings.shopify_client_secret,
+        )
+        total_revenue, ro_system_revenue = shopify.fetch_daily_revenue(report_date)
+        metrics.extend(
+            (
+                ChannelMetrics("Shopify", Decimal("0"), total_revenue),
+                ChannelMetrics("RO system", Decimal("0"), ro_system_revenue),
+            )
+        )
+        logging.info(
+            "Shopify report loaded for %s: total_revenue=%s ro_system=%s",
+            report_date,
+            total_revenue,
+            ro_system_revenue,
+        )
     report = format_slack_report(report_date, metrics)
 
     settings.processed_data_dir.mkdir(parents=True, exist_ok=True)
     output_path = settings.processed_data_dir / f"daily_report_{report_date:%Y-%m-%d}.csv"
     save_processed_csv(output_path, report_date, metrics)
+    removed_reports = cleanup_processed_reports(settings.processed_data_dir)
     logging.info("Report saved to %s", output_path)
+    if removed_reports:
+        logging.info(
+            "Removed %s processed reports outside the 7-day retention window",
+            len(removed_reports),
+        )
 
     if send_to_slack:
         slack = SlackService(settings.slack_bot_token)
@@ -102,15 +151,59 @@ def generate_daily_report(
 
 
 def run_automated_pipeline() -> Path:
-    """Fetch Gmail, process the downloaded CSV, and send it to Slack."""
-    logging.info("Starting scheduled Gmail-to-Slack report pipeline")
-    raw_path = fetch_latest_gmail_report()
+    """Read all platforms, update Sheets, send Slack, and retain seven days."""
+    logging.info("Starting scheduled advertising report pipeline")
+    report_date, google_metrics = fetch_google_ads_metrics()
     processed_path = generate_daily_report(
-        csv_paths=[raw_path],
-        send_to_slack=True,
+        report_date=report_date,
+        metrics=google_metrics,
+        send_to_slack=False,
     )
+    sync_processed_report_to_google_sheet(processed_path)
+
+    report_date, metrics = load_processed_csv(processed_path)
+    report = format_slack_report(report_date, metrics)
+    if not settings.scheduled_channel_ids:
+        raise ValueError("No Slack channel IDs were configured.")
+    slack = SlackService(settings.slack_bot_token)
+    for channel_id in settings.scheduled_channel_ids:
+        slack.send_report(channel_id, report)
+
     logging.info("Scheduled report pipeline completed: %s", processed_path.name)
     return processed_path
+
+
+def sync_processed_report_to_google_sheet(processed_path: Path) -> dict:
+    """Write one processed report into its monthly Actual Pacing row."""
+    report_date, metrics = load_processed_csv(processed_path)
+    sheets = GoogleSheetsService(
+        spreadsheet_link=settings.google_sheets_link,
+        credentials_file=settings.google_service_account_file,
+    )
+    result = sheets.write_actual_pacing(report_date, metrics)
+    logging.info(
+        "Google Sheet updated: tab=%s row=%s cells=%s",
+        result["tab"],
+        result["row"],
+        len(result["cells"]),
+    )
+    return result
+
+
+def generate_and_sync_dates(report_dates: Iterable[date]) -> list:
+    """Process specified dates and update Sheets without sending to Slack."""
+    results = []
+    for report_date in report_dates:
+        logging.info("Starting Sheet-only pipeline for %s", report_date)
+        selected_date, google_metrics = fetch_google_ads_metrics(report_date)
+        processed_path = generate_daily_report(
+            report_date=selected_date,
+            metrics=google_metrics,
+            send_to_slack=False,
+        )
+        sheet_result = sync_processed_report_to_google_sheet(processed_path)
+        results.append((processed_path, sheet_result))
+    return results
 
 
 def configured_report_time() -> datetime_time:
@@ -128,7 +221,7 @@ def configured_report_time() -> datetime_time:
 
 def _scheduler_state_path() -> Path:
     """Return the persistent marker used to prevent duplicate daily sends."""
-    return settings.processed_data_dir / ".last_scheduled_email_date"
+    return settings.processed_data_dir / ".last_scheduled_report_date"
 
 
 def _read_last_scheduled_date() -> Optional[date]:
@@ -189,7 +282,7 @@ def load_latest_processed_report() -> str:
     report_paths = list(settings.processed_data_dir.glob("daily_report_*.csv"))
     if not report_paths:
         raise FileNotFoundError(
-            "No processed report was found. Run: python app.py --generate"
+            "No processed report was found. Run: python app.py --run-now"
         )
 
     latest_report = max(report_paths, key=lambda path: path.stat().st_mtime)
@@ -253,22 +346,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run-now",
         action="store_true",
-        help="Run the complete Gmail-to-Slack pipeline immediately and exit.",
+        help="Run the complete Sheets-to-Slack pipeline immediately and exit.",
     )
     parser.add_argument(
-        "--fetch-gmail",
+        "--sync-sheet",
         action="store_true",
-        help="Download the newest Google Ads report from Gmail into data/raw.",
+        help="Write the newest processed CSV to Google Sheets and exit.",
     )
     parser.add_argument(
-        "--generate",
-        action="store_true",
-        help="Generate a processed report from CSV files in data/raw and exit.",
-    )
-    parser.add_argument(
-        "--send",
-        action="store_true",
-        help="When generating, send the report to configured Slack channels.",
+        "--sheet-only-dates",
+        nargs="+",
+        metavar="YYYY-MM-DD",
+        help=(
+            "Generate the specified dates and write them to Google Sheets "
+            "without sending Slack messages."
+        ),
     )
     args = parser.parse_args()
     if args.run_now:
@@ -276,17 +368,28 @@ if __name__ == "__main__":
         print(f"Automated pipeline completed: {output_path}")
         raise SystemExit(0)
 
-    downloaded_path = None
-    if args.fetch_gmail:
-        downloaded_path = fetch_latest_gmail_report()
-    if args.generate:
-        selected_paths = [downloaded_path] if downloaded_path else None
-        output_path = generate_daily_report(
-            csv_paths=selected_paths,
-            send_to_slack=args.send,
+    if args.sync_sheet:
+        processed_paths = sorted(
+            settings.processed_data_dir.glob("daily_report_*.csv")
         )
-        print(f"Processed CSV generated: {output_path}")
-    elif downloaded_path:
-        print(f"Raw CSV downloaded: {downloaded_path}")
-    else:
-        start_bot()
+        if not processed_paths:
+            raise FileNotFoundError("No processed report was found to sync.")
+        result = sync_processed_report_to_google_sheet(processed_paths[-1])
+        print(
+            f"Google Sheet updated: {result['tab']} row {result['row']} "
+            f"({len(result['cells'])} cells)"
+        )
+        raise SystemExit(0)
+
+    if args.sheet_only_dates:
+        requested_dates = [date.fromisoformat(value) for value in args.sheet_only_dates]
+        results = generate_and_sync_dates(requested_dates)
+        for processed_path, result in results:
+            print(
+                f"Google Sheet updated from {processed_path.name}: "
+                f"{result['tab']} row {result['row']} "
+                f"({len(result['cells'])} cells)"
+            )
+        raise SystemExit(0)
+
+    start_bot()
