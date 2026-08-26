@@ -69,6 +69,33 @@ class ReportServiceTests(unittest.TestCase):
         )
         self.assertIn("• *TikTok Spend:* - | *ROAS:* -", report)
 
+    def test_appends_mtd_summary_at_the_bottom(self):
+        report = format_slack_report(
+            date(2026, 8, 25),
+            [],
+            mtd_summary={
+                "paid_media_spend": "$93,313.83",
+                "total_revenue": "$330,581.75",
+                "roas": "3.54",
+                "avg_daily_budget_remaining": "$5,848.27",
+                "follower_growth": "0",
+                "spend_pacing": "89.77%",
+                "revenue_pacing": "86.09%",
+            },
+        )
+        self.assertTrue(
+            report.endswith(
+                "--------------------------------------------------\n"
+                "• *MTD Paid Media Spend:* $93,313.83\n"
+                "• *MTD Total Revenue:* $330,581.75\n"
+                "• *MTD ROAS:* 3.54\n"
+                "• *Avg Daily Budget Remaining:* $5,848.27\n"
+                "• *MTD Follower Growth:* 0\n"
+                "• *MTD Spend Pacing %:* 89.77%\n"
+                "• *MTD Total Revenue Pacing %:* 86.09%"
+            )
+        )
+
     def test_processed_csv_contains_data_without_slack_markup(self):
         metrics = [
             ChannelMetrics("Google Search", Decimal("100"), Decimal("350")),

@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from google_sheets_service import (
     build_actual_pacing_values,
+    extract_mtd_summary,
     locate_actual_pacing_row,
     parse_budget_pacing_tab,
     select_budget_pacing_tab,
@@ -117,6 +118,35 @@ class GoogleSheetsTabSelectionTests(unittest.TestCase):
         )
         self.assertNotIn("AA", values)
         self.assertNotIn("AB", values)
+
+    def test_extracts_mtd_summary_by_label_from_any_columns(self):
+        summary = extract_mtd_summary(
+            [
+                ["", "MTD Paid Media Spend", "$93,313.83"],
+                ["", "MTD Total Revenue", "$330,581.75"],
+                ["", "MTD ROAS", "3.54"],
+                ["", "Avg Daily Budget Remaining", "$5,848.27"],
+                ["", "MTD Follower Growth", "0"],
+                ["", "MTD Spend Pacing %", "89.77%"],
+                ["", "MTD Total Revenue Pacing %", "86.09%"],
+            ]
+        )
+        self.assertEqual(summary["paid_media_spend"], "$93,313.83")
+        self.assertEqual(summary["total_revenue"], "$330,581.75")
+        self.assertEqual(summary["roas"], "3.54")
+        self.assertEqual(summary["avg_daily_budget_remaining"], "$5,848.27")
+        self.assertEqual(summary["follower_growth"], "0")
+        self.assertEqual(summary["spend_pacing"], "89.77%")
+        self.assertEqual(summary["revenue_pacing"], "86.09%")
+
+    def test_mtd_summary_requires_all_seven_unique_labels(self):
+        with self.assertRaises(LookupError):
+            extract_mtd_summary(
+                [
+                    ["MTD Paid Media Spend", "$1"],
+                    ["MTD Total Revenue", "$2"],
+                ]
+            )
 
 
 if __name__ == "__main__":

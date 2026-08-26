@@ -59,6 +59,16 @@ EXPECTED_ACTUAL_HEADERS = {
     32: "google ads roas",
 }
 
+MTD_SUMMARY_LABELS = {
+    "mtd paid media spend": "paid_media_spend",
+    "mtd total revenue": "total_revenue",
+    "mtd roas": "roas",
+    "avg daily budget remaining": "avg_daily_budget_remaining",
+    "mtd follower growth": "follower_growth",
+    "mtd spend pacing %": "spend_pacing",
+    "mtd total revenue pacing %": "revenue_pacing",
+}
+
 
 _BUDGET_PACING_TAB_PATTERN = re.compile(
     r"^\s*(?P<year>\d{2})\s+(?P<month>[A-Za-z]+)\s*[-–—]\s*Budget\s+Pacing\s*$",
@@ -203,6 +213,31 @@ def validate_actual_pacing_headers(rows: Sequence[Sequence[object]]) -> None:
         raise ValueError("Unexpected Actual Pacing layout: " + "; ".join(mismatches))
 
 
+def extract_mtd_summary(rows: Sequence[Sequence[object]]) -> Dict[str, str]:
+    """Find the seven formula-driven MTD values by label, not cell address."""
+    matches: Dict[str, List[str]] = {
+        key: [] for key in MTD_SUMMARY_LABELS.values()
+    }
+    for row in rows:
+        for column_index, value in enumerate(row):
+            key = MTD_SUMMARY_LABELS.get(_normalized_text(value))
+            if key is None:
+                continue
+            adjacent_value = row[column_index + 1] if column_index + 1 < len(row) else ""
+            text = str(adjacent_value).strip()
+            if text:
+                matches[key].append(text)
+
+    problems = [
+        f"{key}: found {len(values)} values"
+        for key, values in matches.items()
+        if len(values) != 1
+    ]
+    if problems:
+        raise LookupError("Could not uniquely locate MTD summary: " + "; ".join(problems))
+    return {key: values[0] for key, values in matches.items()}
+
+
 def _aggregate_by_name(metrics: Iterable[ChannelMetrics]) -> Dict[str, ChannelMetrics]:
     totals: Dict[str, Dict[str, object]] = {}
     for metric in metrics:
@@ -345,7 +380,7 @@ class GoogleSheetsService:
         return [sheet["properties"]["title"] for sheet in payload.get("sheets", [])]
 
     def _read_tab_rows(self, tab_name: str) -> List[List[object]]:
-        range_name = quote(_quoted_range(tab_name, "A1:AG400"), safe="")
+        range_name = quote(_quoted_range(tab_name, "A1:AI400"), safe="")
         response = self.session.get(
             f"{self.base_url}/values/{range_name}",
             params={
@@ -356,6 +391,11 @@ class GoogleSheetsService:
         )
         payload = self._json_response(response, "tab read")
         return payload.get("values", [])
+
+    def read_mtd_summary(self, report_date: date) -> Dict[str, str]:
+        """Read displayed MTD totals from the matching monthly pacing tab."""
+        tab_name = select_budget_pacing_tab(self.list_tab_titles(), report_date)
+        return extract_mtd_summary(self._read_tab_rows(tab_name))
 
     def write_actual_pacing(
         self,

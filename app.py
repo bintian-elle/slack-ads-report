@@ -159,10 +159,14 @@ def run_automated_pipeline() -> Path:
         metrics=google_metrics,
         send_to_slack=False,
     )
-    sync_processed_report_to_google_sheet(processed_path)
+    sheet_result = sync_processed_report_to_google_sheet(processed_path)
 
     report_date, metrics = load_processed_csv(processed_path)
-    report = format_slack_report(report_date, metrics)
+    report = format_slack_report(
+        report_date,
+        metrics,
+        mtd_summary=sheet_result["mtd_summary"],
+    )
     if not settings.scheduled_channel_ids:
         raise ValueError("No Slack channel IDs were configured.")
     slack = SlackService(settings.slack_bot_token)
@@ -174,13 +178,14 @@ def run_automated_pipeline() -> Path:
 
 
 def sync_processed_report_to_google_sheet(processed_path: Path) -> dict:
-    """Write one processed report into its monthly Actual Pacing row."""
+    """Write one report, then read its recalculated monthly MTD summary."""
     report_date, metrics = load_processed_csv(processed_path)
     sheets = GoogleSheetsService(
         spreadsheet_link=settings.google_sheets_link,
         credentials_file=settings.google_service_account_file,
     )
     result = sheets.write_actual_pacing(report_date, metrics)
+    result["mtd_summary"] = sheets.read_mtd_summary(report_date)
     logging.info(
         "Google Sheet updated: tab=%s row=%s cells=%s",
         result["tab"],
@@ -288,7 +293,12 @@ def load_latest_processed_report() -> str:
     latest_report = max(report_paths, key=lambda path: path.stat().st_mtime)
     logging.info("Using processed report %s", latest_report.name)
     report_date, metrics = load_processed_csv(latest_report)
-    return format_slack_report(report_date, metrics)
+    sheets = GoogleSheetsService(
+        spreadsheet_link=settings.google_sheets_link,
+        credentials_file=settings.google_service_account_file,
+    )
+    mtd_summary = sheets.read_mtd_summary(report_date)
+    return format_slack_report(report_date, metrics, mtd_summary=mtd_summary)
 
 
 def create_bolt_app() -> App:

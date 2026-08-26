@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 CAMPAIGN_TYPE_NAMES: Dict[str, str] = {
@@ -237,6 +237,7 @@ def load_processed_csv(csv_path: Path) -> Tuple[date, List[ChannelMetrics]]:
 def format_slack_report(
     report_date: date,
     metrics: Iterable[ChannelMetrics],
+    mtd_summary: Optional[Mapping[str, str]] = None,
 ) -> str:
     """Format normalized metrics using the fixed Slack daily report template."""
     rows = _aggregate_metrics(metrics)
@@ -369,4 +370,23 @@ def format_slack_report(
         reddit_line,
         google_line,
     ]
+    if mtd_summary is not None:
+        lines.extend(
+            [
+                "--------------------------------------------------",
+                f"• *MTD Paid Media Spend:* {mtd_summary['paid_media_spend']}",
+                f"• *MTD Total Revenue:* {mtd_summary['total_revenue']}",
+                f"• *MTD ROAS:* {mtd_summary['roas']}",
+                (
+                    "• *Avg Daily Budget Remaining:* "
+                    f"{mtd_summary['avg_daily_budget_remaining']}"
+                ),
+                f"• *MTD Follower Growth:* {mtd_summary['follower_growth']}",
+                f"• *MTD Spend Pacing %:* {mtd_summary['spend_pacing']}",
+                (
+                    "• *MTD Total Revenue Pacing %:* "
+                    f"{mtd_summary['revenue_pacing']}"
+                ),
+            ]
+        )
     return "\n".join(lines)
