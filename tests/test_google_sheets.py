@@ -9,6 +9,7 @@ from google_sheets_service import (
     extract_mtd_summary,
     locate_actual_pacing_row,
     parse_budget_pacing_tab,
+    parse_optional_tiktok_values,
     select_budget_pacing_tab,
     validate_actual_pacing_headers,
 )
@@ -147,6 +148,16 @@ class GoogleSheetsTabSelectionTests(unittest.TestCase):
                     ["MTD Total Revenue", "$2"],
                 ]
             )
+
+    def test_reads_optional_tiktok_spend_and_roas(self):
+        metric = parse_optional_tiktok_values([["54.53", "7.49"]])
+        self.assertEqual(metric.name, "TikTok")
+        self.assertEqual(metric.spend, Decimal("54.53"))
+        self.assertEqual(metric.roas, Decimal("7.49"))
+
+    def test_blank_tiktok_spend_is_not_available(self):
+        self.assertIsNone(parse_optional_tiktok_values([]))
+        self.assertIsNone(parse_optional_tiktok_values([[""]]))
 
 
 if __name__ == "__main__":

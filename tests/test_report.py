@@ -69,6 +69,28 @@ class ReportServiceTests(unittest.TestCase):
         )
         self.assertIn("• *TikTok Spend:* - | *ROAS:* -", report)
 
+    def test_sheet_tiktok_is_included_in_totals_when_available(self):
+        report = format_slack_report(
+            date(2026, 8, 24),
+            [
+                ChannelMetrics("Pmax", Decimal("10"), Decimal("20")),
+                ChannelMetrics("Google Search", Decimal("10"), Decimal("20")),
+                ChannelMetrics("Shopping", Decimal("10"), Decimal("20")),
+                ChannelMetrics("Meta", Decimal("10"), Decimal("20")),
+                ChannelMetrics("Bing", Decimal("10"), Decimal("20")),
+                ChannelMetrics("Engagement", Decimal("10"), Decimal("0")),
+                ChannelMetrics("Google DG", Decimal("10"), Decimal("20")),
+                ChannelMetrics("Reddit", Decimal("10"), Decimal("20")),
+                ChannelMetrics("TikTok", Decimal("10"), Decimal("30")),
+                ChannelMetrics("Shopify", Decimal("0"), Decimal("450")),
+            ],
+        )
+        self.assertIn(
+            "*Total Spend:* $90.00 | *Total Revenue:* $450.00 | *ROAS:* 5.00",
+            report,
+        )
+        self.assertIn("• *TikTok Spend:* $10.00 | *ROAS:* 3.00", report)
+
     def test_appends_mtd_summary_at_the_bottom(self):
         report = format_slack_report(
             date(2026, 8, 25),

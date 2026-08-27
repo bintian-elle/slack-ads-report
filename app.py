@@ -162,6 +162,9 @@ def run_automated_pipeline() -> Path:
     sheet_result = sync_processed_report_to_google_sheet(processed_path)
 
     report_date, metrics = load_processed_csv(processed_path)
+    tiktok_metrics = sheet_result.get("tiktok_metrics")
+    if tiktok_metrics is not None:
+        metrics.append(tiktok_metrics)
     report = format_slack_report(
         report_date,
         metrics,
@@ -186,6 +189,7 @@ def sync_processed_report_to_google_sheet(processed_path: Path) -> dict:
     )
     result = sheets.write_actual_pacing(report_date, metrics)
     result["mtd_summary"] = sheets.read_mtd_summary(report_date)
+    result["tiktok_metrics"] = sheets.read_tiktok_metrics(report_date)
     logging.info(
         "Google Sheet updated: tab=%s row=%s cells=%s",
         result["tab"],
@@ -298,6 +302,9 @@ def load_latest_processed_report() -> str:
         credentials_file=settings.google_service_account_file,
     )
     mtd_summary = sheets.read_mtd_summary(report_date)
+    tiktok_metrics = sheets.read_tiktok_metrics(report_date)
+    if tiktok_metrics is not None:
+        metrics.append(tiktok_metrics)
     return format_slack_report(report_date, metrics, mtd_summary=mtd_summary)
 
 

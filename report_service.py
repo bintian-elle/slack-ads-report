@@ -281,9 +281,12 @@ def format_slack_report(
     }
     has_complete_spend = required_spend_channels.issubset(row_by_name)
     if has_complete_spend:
+        total_spend_channels = set(required_spend_channels)
+        if "TikTok" in row_by_name:
+            total_spend_channels.add("TikTok")
         total_spend = (
             sum(
-                (row_by_name[name].spend for name in required_spend_channels),
+                (row_by_name[name].spend for name in total_spend_channels),
                 Decimal("0"),
             )
         )

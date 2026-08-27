@@ -238,6 +238,21 @@ def extract_mtd_summary(rows: Sequence[Sequence[object]]) -> Dict[str, str]:
     return {key: values[0] for key, values in matches.items()}
 
 
+def parse_optional_tiktok_values(
+    values: Sequence[Sequence[object]],
+) -> Optional[ChannelMetrics]:
+    """Convert optional Sheet TikTok Spend/ROAS cells into one metric."""
+    if not values or not values[0] or values[0][0] in (None, ""):
+        return None
+    row = list(values[0]) + [""]
+    try:
+        spend = Decimal(str(row[0]).replace("$", "").replace(",", "").strip())
+        roas = Decimal(str(row[1] or "0").replace(",", "").strip())
+    except ArithmeticError as error:
+        raise ValueError(f"Invalid TikTok Sheet values: {values}") from error
+    return ChannelMetrics(name="TikTok", spend=spend, revenue=spend * roas)
+
+
 def _aggregate_by_name(metrics: Iterable[ChannelMetrics]) -> Dict[str, ChannelMetrics]:
     totals: Dict[str, Dict[str, object]] = {}
     for metric in metrics:
@@ -396,6 +411,20 @@ class GoogleSheetsService:
         """Read displayed MTD totals from the matching monthly pacing tab."""
         tab_name = select_budget_pacing_tab(self.list_tab_titles(), report_date)
         return extract_mtd_summary(self._read_tab_rows(tab_name))
+
+    def read_tiktok_metrics(self, report_date: date) -> Optional[ChannelMetrics]:
+        """Read manually populated TikTok Spend/ROAS without writing the cells."""
+        tab_name = select_budget_pacing_tab(self.list_tab_titles(), report_date)
+        rows = self._read_tab_rows(tab_name)
+        row_number = locate_actual_pacing_row(rows, report_date)
+        range_name = quote(_quoted_range(tab_name, f"AA{row_number}:AB{row_number}"), safe="")
+        response = self.session.get(
+            f"{self.base_url}/values/{range_name}",
+            params={"valueRenderOption": "UNFORMATTED_VALUE"},
+            timeout=30,
+        )
+        payload = self._json_response(response, "TikTok read")
+        return parse_optional_tiktok_values(payload.get("values", []))
 
     def write_actual_pacing(
         self,
