@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 
 from google_sheets_service import (
+    build_actual_total_spend_formula,
     build_actual_pacing_values,
     extract_mtd_summary,
     locate_actual_pacing_row,
@@ -17,6 +18,12 @@ from report_service import ChannelMetrics
 
 
 class GoogleSheetsTabSelectionTests(unittest.TestCase):
+    def test_builds_actual_total_spend_formula_for_all_paid_channels(self):
+        self.assertEqual(
+            build_actual_total_spend_formula(93),
+            "=M93+O93+Q93+S93+U93+W93+Y93+AA93+AC93",
+        )
+
     def test_parses_abbreviated_month(self):
         self.assertEqual(
             parse_budget_pacing_tab("26 Aug - Budget Pacing"),

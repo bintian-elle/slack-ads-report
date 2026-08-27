@@ -282,6 +282,14 @@ def _sheet_number(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.01")))
 
 
+def build_actual_total_spend_formula(row_number: int) -> str:
+    """Sum every paid channel in one Actual Pacing row, including Sheet TikTok."""
+    if row_number < 1:
+        raise ValueError("row_number must be positive.")
+    columns = ("M", "O", "Q", "S", "U", "W", "Y", "AA", "AC")
+    return "=" + "+".join(f"{column}{row_number}" for column in columns)
+
+
 def build_actual_pacing_values(metrics: Iterable[ChannelMetrics]) -> Dict[str, object]:
     """Map available channel metrics to Actual Pacing column letters."""
     rows = _aggregate_by_name(metrics)
@@ -439,6 +447,10 @@ class GoogleSheetsService:
         values_by_column = build_actual_pacing_values(metrics)
         if not values_by_column:
             raise ValueError("No supported advertising metrics were available to write.")
+        # D drives the monthly paid-media totals and pacing formulas. Write it
+        # only when the daily report is populated so future blank dates do not
+        # count as zero-spend days in COUNT-based pacing calculations.
+        values_by_column["D"] = build_actual_total_spend_formula(row_number)
 
         data = [
             {
@@ -458,7 +470,7 @@ class GoogleSheetsService:
         response = self.session.get(
             f"{self.base_url}/values:batchGet",
             params=[("ranges", value) for value in ranges]
-            + [("valueRenderOption", "UNFORMATTED_VALUE")],
+            + [("valueRenderOption", "FORMULA")],
             timeout=30,
         )
         verification = self._json_response(response, "write verification")
