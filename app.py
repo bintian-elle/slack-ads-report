@@ -21,7 +21,9 @@ from meta_service import MetaAdsService
 from report_service import (
     ChannelMetrics,
     cleanup_processed_reports,
+    find_latest_processed_report,
     format_slack_report,
+    historical_report_date,
     load_processed_csv,
     save_processed_csv,
 )
@@ -37,6 +39,9 @@ logging.basicConfig(
 
 
 settings = load_settings()
+
+
+HISTORICAL_REFRESH_AGE_DAYS = 7
 
 
 def fetch_google_ads_metrics(
@@ -62,6 +67,7 @@ def generate_daily_report(
     metrics: Iterable[ChannelMetrics],
     channel_ids=None,
     send_to_slack=False,
+    cleanup_reports=True,
 ) -> Path:
     """Enrich normalized metrics, save the report, and optionally send Slack."""
     metrics = list(metrics)
@@ -131,7 +137,11 @@ def generate_daily_report(
     settings.processed_data_dir.mkdir(parents=True, exist_ok=True)
     output_path = settings.processed_data_dir / f"daily_report_{report_date:%Y-%m-%d}.csv"
     save_processed_csv(output_path, report_date, metrics)
-    removed_reports = cleanup_processed_reports(settings.processed_data_dir)
+    removed_reports = (
+        cleanup_processed_reports(settings.processed_data_dir)
+        if cleanup_reports
+        else []
+    )
     logging.info("Report saved to %s", output_path)
     if removed_reports:
         logging.info(
@@ -151,7 +161,7 @@ def generate_daily_report(
 
 
 def run_automated_pipeline() -> Path:
-    """Read all platforms, update Sheets, send Slack, and retain seven days."""
+    """Send the daily report, then refresh delayed data from seven days ago."""
     logging.info("Starting scheduled advertising report pipeline")
     report_date, google_metrics = fetch_google_ads_metrics()
     processed_path = generate_daily_report(
@@ -176,8 +186,56 @@ def run_automated_pipeline() -> Path:
     for channel_id in settings.scheduled_channel_ids:
         slack.send_report(channel_id, report)
 
+    try:
+        refresh_historical_sheet(report_date)
+    except Exception:
+        # Slack has already been delivered. Do not retry the entire pipeline and
+        # send a duplicate message if only the historical refresh fails.
+        logging.exception(
+            "Seven-day historical Sheet refresh failed for %s",
+            historical_report_date(
+                report_date,
+                HISTORICAL_REFRESH_AGE_DAYS,
+            ),
+        )
+
     logging.info("Scheduled report pipeline completed: %s", processed_path.name)
     return processed_path
+
+
+def refresh_historical_sheet(latest_report_date: date) -> dict:
+    """Refetch and overwrite data from seven days before the scheduled run."""
+    # The latest daily report is yesterday, so seven days before the run is
+    # six calendar days before the latest report date.
+    historical_date = historical_report_date(
+        latest_report_date,
+        HISTORICAL_REFRESH_AGE_DAYS,
+    )
+    logging.info(
+        "Refreshing delayed platform data in Google Sheet for %s",
+        historical_date,
+    )
+    try:
+        selected_date, google_metrics = fetch_google_ads_metrics(historical_date)
+        processed_path = generate_daily_report(
+            report_date=selected_date,
+            metrics=google_metrics,
+            send_to_slack=False,
+            cleanup_reports=False,
+        )
+        result = sync_processed_report_to_google_sheet(processed_path)
+    finally:
+        # Keep the normal rolling seven-day retention window after overwriting
+        # the oldest report in that window.
+        cleanup_processed_reports(settings.processed_data_dir)
+
+    logging.info(
+        "Historical Google Sheet refresh completed: date=%s tab=%s row=%s",
+        historical_date,
+        result["tab"],
+        result["row"],
+    )
+    return result
 
 
 def sync_processed_report_to_google_sheet(processed_path: Path) -> dict:
@@ -288,13 +346,12 @@ def scheduled_pipeline_loop() -> None:
 
 def load_latest_processed_report() -> str:
     """Load the newest processed CSV and add Slack formatting at runtime."""
-    report_paths = list(settings.processed_data_dir.glob("daily_report_*.csv"))
-    if not report_paths:
+    latest_report = find_latest_processed_report(settings.processed_data_dir)
+    if latest_report is None:
         raise FileNotFoundError(
             "No processed report was found. Run: python app.py --run-now"
         )
 
-    latest_report = max(report_paths, key=lambda path: path.stat().st_mtime)
     logging.info("Using processed report %s", latest_report.name)
     report_date, metrics = load_processed_csv(latest_report)
     sheets = GoogleSheetsService(
@@ -336,11 +393,7 @@ def create_bolt_app() -> App:
 
 def start_bot() -> None:
     """Start Slack Socket Mode and the daily report scheduler."""
-    latest_report = max(
-        settings.processed_data_dir.glob("daily_report_*.csv"),
-        key=lambda path: path.stat().st_mtime,
-        default=None,
-    )
+    latest_report = find_latest_processed_report(settings.processed_data_dir)
     if latest_report:
         logging.info("/daily-report will return %s", latest_report.name)
     else:

@@ -39,6 +39,33 @@ def calculate_roas(revenue: Decimal, spend: Decimal) -> Decimal:
     return revenue / spend
 
 
+def historical_report_date(
+    latest_report_date: date,
+    age_days: int = 7,
+) -> date:
+    """Return the report date that is age_days old on the next run day."""
+    if age_days < 1:
+        raise ValueError("age_days must be at least 1.")
+    return latest_report_date - timedelta(days=age_days - 1)
+
+
+def find_latest_processed_report(processed_dir: Path) -> Optional[Path]:
+    """Find the newest report by its embedded date, not modification time."""
+    dated_paths = []
+    for path in processed_dir.glob("daily_report_*.csv"):
+        match = re.fullmatch(r"daily_report_(\d{4}-\d{2}-\d{2})\.csv", path.name)
+        if not match:
+            continue
+        try:
+            report_date = date.fromisoformat(match.group(1))
+        except ValueError:
+            continue
+        dated_paths.append((report_date, path))
+    if not dated_paths:
+        return None
+    return max(dated_paths, key=lambda item: item[0])[1]
+
+
 def _aggregate_metrics(metrics: Iterable[ChannelMetrics]) -> List[ChannelMetrics]:
     """Combine rows that belong to the same advertising channel."""
     totals: Dict[str, Dict[str, object]] = {}

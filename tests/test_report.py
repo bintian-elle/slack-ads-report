@@ -10,13 +10,34 @@ from report_service import (
     ChannelMetrics,
     calculate_roas,
     cleanup_processed_reports,
+    find_latest_processed_report,
     format_slack_report,
+    historical_report_date,
     load_processed_csv,
     save_processed_csv,
 )
 
 
 class ReportServiceTests(unittest.TestCase):
+    def test_historical_refresh_uses_seven_days_before_run_day(self):
+        self.assertEqual(
+            historical_report_date(date(2026, 8, 26)),
+            date(2026, 8, 20),
+        )
+
+    def test_latest_processed_report_ignores_file_modification_time(self):
+        with TemporaryDirectory() as temp_dir:
+            processed_dir = Path(temp_dir)
+            newest = processed_dir / "daily_report_2026-08-26.csv"
+            refreshed = processed_dir / "daily_report_2026-08-20.csv"
+            newest.write_text("newest", encoding="utf-8")
+            refreshed.write_text("refreshed later", encoding="utf-8")
+
+            self.assertEqual(
+                find_latest_processed_report(processed_dir),
+                newest,
+            )
+
     def test_calculate_roas(self):
         self.assertEqual(calculate_roas(Decimal("300"), Decimal("100")), Decimal("3"))
 
