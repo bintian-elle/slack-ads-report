@@ -41,6 +41,8 @@ class Settings:
     shopify_client_secret: str
     meta_access_token: str
     meta_ad_account_id: str
+    tiktok_access_token: str
+    tiktok_advertiser_ids: str
     google_ads_raw_tab: str
 
 
@@ -82,5 +84,7 @@ def load_settings() -> Settings:
         shopify_client_secret=os.getenv("SHOPIFY_CLIENT_SECRET", "").strip(),
         meta_access_token=os.getenv("META_ACCESS_TOKEN", "").strip(),
         meta_ad_account_id=os.getenv("META_AD_ACCOUNT_ID", "").strip(),
+        tiktok_access_token=os.getenv("TIKTOK_ACCESS_TOKEN", "").strip(),
+        tiktok_advertiser_ids=os.getenv("TIKTOK_ADVERTISER_IDS", "").strip(),
         google_ads_raw_tab=os.getenv("GOOGLE_ADS_RAW_TAB", "Google Ads Raw").strip(),
     )

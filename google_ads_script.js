@@ -9,7 +9,8 @@
  *
  * Each run refreshes the last 10 completed days (ending yesterday). Existing
  * rows for those dates are replaced so late conversion/revenue updates from
- * Google Ads are reflected without creating duplicates.
+ * Google Ads are reflected without creating duplicates. Rows older than the
+ * lookback window are deleted so the Raw sheet remains bounded.
  */
 const CONFIG = {
   SPREADSHEET_URL: 'https://docs.google.com/spreadsheets/d/1SBRI8qw2ve-iwxejowFxfxLs5uZX44Ab7-i5QSv5pDs/edit',
@@ -84,11 +85,15 @@ function main() {
   const header = ['Date', 'Campaign Type', 'Spend', 'Revenue', 'ROAS', 'Updated At'];
   const existing = sheet.getDataRange().getValues();
   const refreshedDateSet = new Set(refreshedDates);
-  const retained = existing.length > 1
-    ? existing.slice(1).filter(
-        (row) => !refreshedDateSet.has(normalizeSheetDate(row[0], timezone))
-      )
-    : [];
+  const existingRows = existing.length > 1 ? existing.slice(1) : [];
+  const retained = existingRows.filter((row) => {
+    const rowDate = normalizeSheetDate(row[0], timezone);
+    return rowDate >= dateRange.start && !refreshedDateSet.has(rowDate);
+  });
+  const expiredRowCount = existingRows.filter((row) => {
+    const rowDate = normalizeSheetDate(row[0], timezone);
+    return rowDate && rowDate < dateRange.start;
+  }).length;
   const allRows = [header].concat(retained, outputRows);
 
   sheet.clearContents();
@@ -105,7 +110,8 @@ function main() {
   }
   sheet.autoResizeColumns(1, header.length);
   console.log(
-    `Refreshed ${outputRows.length} rows for ${dateRange.start} through ${dateRange.end}.`
+    `Refreshed ${outputRows.length} rows for ${dateRange.start} through ${dateRange.end}; ` +
+    `deleted ${expiredRowCount} rows older than ${dateRange.start}.`
   );
 }
 

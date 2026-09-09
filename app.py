@@ -30,6 +30,7 @@ from report_service import (
 from reddit_service import RedditAdsService
 from slack_service import SlackService
 from shopify_service import ShopifyService
+from tiktok_service import TikTokAdsService
 
 
 logging.basicConfig(
@@ -113,6 +114,19 @@ def generate_daily_report(
             meta_metrics.add_to_cart,
             engagement_metrics.spend,
         )
+    if not any(metric.name == "TikTok" for metric in metrics):
+        tiktok = TikTokAdsService(
+            access_token=settings.tiktok_access_token,
+            advertiser_ids=settings.tiktok_advertiser_ids,
+        )
+        tiktok_metrics = tiktok.fetch_daily_metrics(report_date)
+        metrics.append(tiktok_metrics)
+        logging.info(
+            "TikTok report loaded for %s: spend=%s roas=%.2f",
+            report_date,
+            tiktok_metrics.spend,
+            tiktok_metrics.roas,
+        )
     if not any(metric.name == "Shopify" for metric in metrics):
         shopify = ShopifyService(
             store=settings.shopify_store,
@@ -173,7 +187,9 @@ def run_automated_pipeline() -> Path:
 
     report_date, metrics = load_processed_csv(processed_path)
     tiktok_metrics = sheet_result.get("tiktok_metrics")
-    if tiktok_metrics is not None:
+    if tiktok_metrics is not None and not any(
+        metric.name == "TikTok" for metric in metrics
+    ):
         metrics.append(tiktok_metrics)
     report = format_slack_report(
         report_date,
@@ -360,7 +376,9 @@ def load_latest_processed_report() -> str:
     )
     mtd_summary = sheets.read_mtd_summary(report_date)
     tiktok_metrics = sheets.read_tiktok_metrics(report_date)
-    if tiktok_metrics is not None:
+    if tiktok_metrics is not None and not any(
+        metric.name == "TikTok" for metric in metrics
+    ):
         metrics.append(tiktok_metrics)
     return format_slack_report(report_date, metrics, mtd_summary=mtd_summary)
 

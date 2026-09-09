@@ -1,5 +1,6 @@
 """Tests for report calculations, formatting, storage, and retention."""
 
+import csv
 import unittest
 from datetime import date
 from decimal import Decimal
@@ -175,6 +176,19 @@ class ReportServiceTests(unittest.TestCase):
         self.assertNotIn("Reddit ATC", header)
         self.assertEqual(loaded_date, date(2026, 8, 12))
         self.assertEqual(loaded_metrics[0].roas, Decimal("2.50"))
+
+    def test_processed_total_spend_sums_rounded_channel_values(self):
+        metrics = [
+            ChannelMetrics("Reddit", Decimal("10.005"), Decimal("0")),
+            ChannelMetrics("TikTok", Decimal("20.005"), Decimal("0")),
+        ]
+        with TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "daily_report.csv"
+            save_processed_csv(csv_path, date(2026, 9, 8), metrics)
+            with csv_path.open(encoding="utf-8") as csv_file:
+                record = next(csv.DictReader(csv_file))
+
+        self.assertEqual(record["Total Spend"], "30.00")
 
     def test_processed_retention_keeps_latest_seven_calendar_days(self):
         with TemporaryDirectory() as temp_dir:

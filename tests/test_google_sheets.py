@@ -84,6 +84,8 @@ class GoogleSheetsTabSelectionTests(unittest.TestCase):
         header[17] = "Shopping ROAS"
         header[24] = "Google DG Spend"
         header[25] = "DG ROAS"
+        header[26] = "TikTok Spend"
+        header[27] = "ROAS"
         header[28] = "Reddit Spend"
         header[29] = "Reddit ROAS"
         header[31] = "google ads spend"
@@ -120,12 +122,12 @@ class GoogleSheetsTabSelectionTests(unittest.TestCase):
         self.assertEqual(values["AF"], 200.0)
         self.assertEqual(values["AG"], 2.4)
 
-    def test_does_not_write_tiktok_columns(self):
+    def test_writes_tiktok_columns(self):
         values = build_actual_pacing_values(
             [ChannelMetrics("TikTok", Decimal("50"), Decimal("100"))]
         )
-        self.assertNotIn("AA", values)
-        self.assertNotIn("AB", values)
+        self.assertEqual(values["AA"], 50.0)
+        self.assertEqual(values["AB"], 2.0)
 
     def test_extracts_mtd_summary_by_label_from_any_columns(self):
         summary = extract_mtd_summary(

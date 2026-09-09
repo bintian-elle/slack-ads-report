@@ -53,6 +53,8 @@ EXPECTED_ACTUAL_HEADERS = {
     17: "shopping roas",
     24: "google dg spend",
     25: "dg roas",
+    26: "tiktok spend",
+    27: "roas",
     28: "reddit spend",
     29: "reddit roas",
     31: "google ads spend",
@@ -309,6 +311,7 @@ def build_actual_pacing_values(metrics: Iterable[ChannelMetrics]) -> Dict[str, o
         "Shopping": ("Q", "R"),
         "Meta": ("S", "T"),
         "Bing": ("U", "V"),
+        "TikTok": ("AA", "AB"),
         "Reddit": ("AC", "AD"),
     }
     for channel_name, (spend_column, roas_column) in channel_columns.items():

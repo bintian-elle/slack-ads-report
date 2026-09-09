@@ -153,7 +153,11 @@ def save_processed_csv(
                 revenue=sum((row.revenue for row in google_dg_rows), Decimal("0")),
             )
         )
-    total_spend = sum((row.spend for row in rows), Decimal("0"))
+    # Match the Sheet total, which sums the displayed cent-level channel cells.
+    total_spend = sum(
+        (row.spend.quantize(Decimal("0.01")) for row in rows),
+        Decimal("0"),
+    )
     total_revenue = (
         special_rows["Shopify"].revenue
         if "Shopify" in special_rows
