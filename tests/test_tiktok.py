@@ -23,6 +23,8 @@ class TikTokAdsServiceTests(unittest.TestCase):
                                 "metrics": {
                                     "spend": "50.00",
                                     "complete_payment_roas": "4.00",
+                                    "impressions": "1000",
+                                    "clicks": "20",
                                 }
                             }
                         ]
@@ -35,6 +37,8 @@ class TikTokAdsServiceTests(unittest.TestCase):
                                 "metrics": {
                                     "spend": "100.00",
                                     "complete_payment_roas": "1.00",
+                                    "impressions": "3000",
+                                    "clicks": "30",
                                 }
                             }
                         ]
@@ -47,6 +51,9 @@ class TikTokAdsServiceTests(unittest.TestCase):
         self.assertEqual(metric.spend, Decimal("150.00"))
         self.assertEqual(metric.revenue, Decimal("300.0000"))
         self.assertEqual(metric.roas, Decimal("2.00"))
+        self.assertEqual(metric.impressions, Decimal("4000"))
+        self.assertEqual(metric.clicks, Decimal("50"))
+        self.assertEqual(metric.ctr, Decimal("1.2500"))
 
 
 if __name__ == "__main__":

@@ -103,7 +103,13 @@ class ReportServiceTests(unittest.TestCase):
                 ChannelMetrics("Engagement", Decimal("10"), Decimal("0")),
                 ChannelMetrics("Google DG", Decimal("10"), Decimal("20")),
                 ChannelMetrics("Reddit", Decimal("10"), Decimal("20")),
-                ChannelMetrics("TikTok", Decimal("10"), Decimal("30")),
+                ChannelMetrics(
+                    "TikTok",
+                    Decimal("10"),
+                    Decimal("30"),
+                    impressions=Decimal("12500"),
+                    clicks=Decimal("250"),
+                ),
                 ChannelMetrics("Shopify", Decimal("0"), Decimal("450")),
             ],
         )
@@ -111,7 +117,11 @@ class ReportServiceTests(unittest.TestCase):
             "*Total Spend:* $90.00 | *Total Revenue:* $450.00 | *ROAS:* 5.00",
             report,
         )
-        self.assertIn("• *TikTok Spend:* $10.00 | *ROAS:* 3.00", report)
+        self.assertIn(
+            "• *TikTok Spend:* $10.00 | *ROAS:* 3.00 | "
+            "*Total Impressions:* 12,500 | *CTR:* 2.00%",
+            report,
+        )
 
     def test_appends_mtd_summary_at_the_bottom(self):
         report = format_slack_report(
@@ -189,6 +199,24 @@ class ReportServiceTests(unittest.TestCase):
                 record = next(csv.DictReader(csv_file))
 
         self.assertEqual(record["Total Spend"], "30.00")
+
+    def test_processed_csv_preserves_tiktok_traffic_metrics(self):
+        metric = ChannelMetrics(
+            "TikTok",
+            Decimal("50.67"),
+            Decimal("0"),
+            impressions=Decimal("12345"),
+            clicks=Decimal("247"),
+        )
+        with TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "daily_report.csv"
+            save_processed_csv(csv_path, date(2026, 9, 9), [metric])
+            _, loaded_metrics = load_processed_csv(csv_path)
+
+        loaded = loaded_metrics[0]
+        self.assertEqual(loaded.impressions, Decimal("12345"))
+        self.assertEqual(loaded.clicks, Decimal("247"))
+        self.assertEqual(loaded.ctr.quantize(Decimal("0.01")), Decimal("2.00"))
 
     def test_processed_retention_keeps_latest_seven_calendar_days(self):
         with TemporaryDirectory() as temp_dir:

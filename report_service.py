@@ -26,10 +26,21 @@ class ChannelMetrics:
     spend: Decimal
     revenue: Decimal
     add_to_cart: Decimal = Decimal("0")
+    impressions: Optional[Decimal] = None
+    clicks: Optional[Decimal] = None
 
     @property
     def roas(self) -> Decimal:
         return calculate_roas(self.revenue, self.spend)
+
+    @property
+    def ctr(self) -> Optional[Decimal]:
+        """Return click-through rate as a percentage when traffic data exists."""
+        if self.impressions is None or self.clicks is None:
+            return None
+        if self.impressions == 0:
+            return Decimal("0")
+        return self.clicks / self.impressions * Decimal("100")
 
 
 def calculate_roas(revenue: Decimal, spend: Decimal) -> Decimal:
@@ -76,11 +87,21 @@ def _aggregate_metrics(metrics: Iterable[ChannelMetrics]) -> List[ChannelMetrics
                 "spend": Decimal("0"),
                 "revenue": Decimal("0"),
                 "add_to_cart": Decimal("0"),
+                "impressions": None,
+                "clicks": None,
             },
         )
         channel["spend"] += row.spend
         channel["revenue"] += row.revenue
         channel["add_to_cart"] += row.add_to_cart
+        if row.impressions is not None:
+            channel["impressions"] = (
+                (channel["impressions"] or Decimal("0")) + row.impressions
+            )
+        if row.clicks is not None:
+            channel["clicks"] = (
+                (channel["clicks"] or Decimal("0")) + row.clicks
+            )
 
     return [
         ChannelMetrics(
@@ -88,6 +109,8 @@ def _aggregate_metrics(metrics: Iterable[ChannelMetrics]) -> List[ChannelMetrics
             spend=values["spend"],
             revenue=values["revenue"],
             add_to_cart=values["add_to_cart"],
+            impressions=values["impressions"],
+            clicks=values["clicks"],
         )
         for name, values in totals.items()
     ]
@@ -197,6 +220,10 @@ def save_processed_csv(
             record[f"{row.name} ROAS"] = f"{row.roas:.2f}"
         if row.name == "Meta" and row.add_to_cart:
             record[f"{row.name} ATC"] = str(row.add_to_cart)
+        if row.name == "TikTok" and row.impressions is not None:
+            record["TikTok Impressions"] = f"{row.impressions:.0f}"
+            record["TikTok Clicks"] = f"{(row.clicks or Decimal('0')):.0f}"
+            record["TikTok CTR"] = f"{(row.ctr or Decimal('0')):.2f}"
 
     google_rows = [
         row
@@ -254,12 +281,18 @@ def load_processed_csv(csv_path: Path) -> Tuple[date, List[ChannelMetrics]]:
             revenue = spend * roas
         else:
             revenue = Decimal(record.get(f"{name} Revenue", "0") or "0")
+        impressions_text = record.get(f"{name} Impressions", "")
+        clicks_text = record.get(f"{name} Clicks", "")
+        impressions = Decimal(impressions_text) if impressions_text else None
+        clicks = Decimal(clicks_text) if clicks_text else None
         metrics.append(
             ChannelMetrics(
                 name=name,
                 spend=spend,
                 revenue=revenue,
                 add_to_cart=Decimal(record.get(f"{name} ATC", "0") or "0"),
+                impressions=impressions,
+                clicks=clicks,
             )
         )
     return report_date, metrics
@@ -347,6 +380,25 @@ def format_slack_report(
     engagement = row_by_name.get("Engagement")
     engagement_text = currency(engagement.spend) if engagement else "-"
 
+    tiktok = row_by_name.get("TikTok")
+    if tiktok is None:
+        tiktok_line = (
+            "• *TikTok Spend:* - | *ROAS:* - | "
+            "*Total Impressions:* - | *CTR:* -"
+        )
+    else:
+        impressions_text = (
+            f"{tiktok.impressions:,.0f}"
+            if tiktok.impressions is not None
+            else "-"
+        )
+        ctr_text = f"{tiktok.ctr:.2f}%" if tiktok.ctr is not None else "-"
+        tiktok_line = (
+            f"• *TikTok Spend:* {currency(tiktok.spend)} | "
+            f"*ROAS:* {tiktok.roas:.2f} | "
+            f"*Total Impressions:* {impressions_text} | *CTR:* {ctr_text}"
+        )
+
     reddit = row_by_name.get("Reddit")
     if reddit is None:
         reddit_line = "• *Reddit Spend:* - | *Reddit ROAS:* -"
@@ -400,7 +452,7 @@ def format_slack_report(
         spend_roas_line("Bing", "Bing"),
         f"• *Engagement:* {engagement_text}",
         spend_roas_line("Google DG", "Google DG"),
-        spend_roas_line("TikTok", "TikTok"),
+        tiktok_line,
         reddit_line,
         google_line,
     ]

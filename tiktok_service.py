@@ -29,9 +29,11 @@ def parse_advertiser_ids(value: str) -> Tuple[str, ...]:
 
 
 def parse_tiktok_daily_reports(payloads: Iterable[Dict]) -> ChannelMetrics:
-    """Combine advertiser reports using spend-weighted purchase ROAS."""
+    """Combine advertiser reports with weighted ROAS and aggregate traffic."""
     spend = Decimal("0")
     revenue = Decimal("0")
+    impressions = Decimal("0")
+    clicks = Decimal("0")
     for payload in payloads:
         rows = payload.get("data", {}).get("list", [])
         if not isinstance(rows, list):
@@ -44,7 +46,15 @@ def parse_tiktok_daily_reports(payloads: Iterable[Dict]) -> ChannelMetrics:
             )
             spend += row_spend
             revenue += row_spend * row_roas
-    return ChannelMetrics(name="TikTok", spend=spend, revenue=revenue)
+            impressions += Decimal(str(metrics.get("impressions") or "0"))
+            clicks += Decimal(str(metrics.get("clicks") or "0"))
+    return ChannelMetrics(
+        name="TikTok",
+        spend=spend,
+        revenue=revenue,
+        impressions=impressions,
+        clicks=clicks,
+    )
 
 
 class TikTokAdsService:
@@ -57,7 +67,7 @@ class TikTokAdsService:
         self.advertiser_ids = parse_advertiser_ids(advertiser_ids)
 
     def fetch_daily_metrics(self, report_date: date) -> ChannelMetrics:
-        """Fetch Spend and complete-payment ROAS for all configured accounts."""
+        """Fetch spend, ROAS, impressions, and clicks for configured accounts."""
         payloads = []
         for advertiser_id in self.advertiser_ids:
             response = requests.get(
@@ -69,7 +79,12 @@ class TikTokAdsService:
                     "data_level": "AUCTION_ADVERTISER",
                     "dimensions": json.dumps(["stat_time_day"]),
                     "metrics": json.dumps(
-                        ["spend", "complete_payment_roas"]
+                        [
+                            "spend",
+                            "complete_payment_roas",
+                            "impressions",
+                            "clicks",
+                        ]
                     ),
                     "start_date": report_date.isoformat(),
                     "end_date": report_date.isoformat(),
