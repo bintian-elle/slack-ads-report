@@ -27,6 +27,22 @@ BASE = Path(__file__).resolve().parent
 METRICS = ['spend', 'roas', 'purchase', 'aov', 'atc', 'impressions', 'clicks', 'cpc', 'ctr', 'cpm']
 
 
+def ad_location(ad):
+    """Destination category; call only for exact-matched effectively ACTIVE ads."""
+    name = ad.get('adset', {}).get('name', '')
+    for pattern in [r'Partnership[-_ ]?Scale', r'Partnership\d+', r'KOL\d+', r'EVG\d+']:
+        found = re.search(pattern, name, re.I)
+        if found:
+            value = found.group()
+            return 'Partnership-Scale' if 'scale' in value.lower() else value
+    text = name + ' ' + ad.get('campaign', {}).get('name', '')
+    for token, label in [('awareness', 'Awareness'), ('retargeting', 'Retargeting'),
+                         ('bidcap', 'BidCap'), ('highestvalue', 'HighestValue'),
+                         ('traffic', 'Traffic'), ('atc', 'ATC')]:
+        if token in text.lower(): return label
+    return name or ad.get('campaign', {}).get('name', 'Unknown destination')
+
+
 def get_json(session, url, params=None):
     """GET only; sanitize network exceptions (URLs may contain credentials)."""
     for attempt in range(4):
