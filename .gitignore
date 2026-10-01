@@ -11,3 +11,4 @@ credentials/*
 # Generated processed advertising reports
 data/processed/*
 !data/processed/.gitkeep
+.venv-kol/

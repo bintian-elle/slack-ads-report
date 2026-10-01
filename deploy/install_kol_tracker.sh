@@ -6,9 +6,9 @@ tracker_user="$(id -un)"
 case "$tracker_root" in
   *' '*|*'"'*|*$'\n'*) echo 'Use a deployment path without spaces or quotes' >&2; exit 1 ;;
 esac
-test -x "$tracker_root/.venv/bin/python"
+test -x "$tracker_root/.venv-kol/bin/python"
 test -f "$tracker_root/.env"
-"$tracker_root/.venv/bin/python" "$tracker_root/kol_tracker.py" check
+"$tracker_root/.venv-kol/bin/python" "$tracker_root/kol_tracker.py" check
 systemd-analyze calendar '*-*-* 08:00:00 America/Chicago'
 for tracker_task in poll daily; do
   sudo tee "/etc/systemd/system/kol-tracker-${tracker_task}.service" >/dev/null <<EOF
@@ -21,7 +21,7 @@ After=network-online.target
 Type=oneshot
 User=${tracker_user}
 WorkingDirectory=${tracker_root}
-ExecStart=${tracker_root}/.venv/bin/python ${tracker_root}/kol_tracker.py ${tracker_task} --apply
+ExecStart=${tracker_root}/.venv-kol/bin/python ${tracker_root}/kol_tracker.py ${tracker_task} --apply
 Environment=PYTHONUNBUFFERED=1
 UMask=0077
 TimeoutStartSec=30min
