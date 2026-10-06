@@ -44,7 +44,7 @@ class OrganicTests(unittest.TestCase):
             values = self.values()
             values[2][4:6] = ['adcode-code', old]
             result = status_plan(values, ads)
-            self.assertEqual(bool(result), old in ['', 'pause'])
+            self.assertEqual(bool(result), old in ['', 'pause', 'paused'])
             if result:
                 self.assertEqual(result[0]['changes'], {5: 'testing'})
 
@@ -59,3 +59,14 @@ class OrganicTests(unittest.TestCase):
         ad['effective_status'] = 'ACTIVE'
         values.append(list(values[2]))
         self.assertEqual(status_plan(values, [ad]), [])
+
+    def test_status_preserves_live_dropdown(self):
+        values = self.values()
+        values[2][4:6] = ['code', 'testing']
+        ads = [{'id': '1', 'effective_status': 'PAUSED', 'creative': {
+            'branded_content': {'instagram_boost_post_access_token': 'code'}}}]
+        cells = [{}, {}, {'values': [{}, {}, {}, {}, {}, {'dataValidation': {
+            'condition': {'type': 'ONE_OF_LIST', 'values': [{'userEnteredValue': 'paused'}]}}}]}]
+        self.assertEqual(status_plan(values, ads, cells)[0]['changes'], {5: 'paused'})
+        cells[2]['values'][5]['dataValidation']['condition']['values'] = [{'userEnteredValue': 'T0'}]
+        self.assertEqual(status_plan(values, ads, cells), [])

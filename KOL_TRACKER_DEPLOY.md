@@ -135,9 +135,10 @@ Existing N:O formulas are preserved; literal cells are recalculated when inputs
 are valid. Null/missing metrics and unmatched posts retain existing values,
 with omissions in the private run plan; zero denominators retain derived values.
 Manual A:E and G, notes, row order and headers remain unchanged. Organic F
-updates only existing `testing`, `pause`, or blank cells, using exact unshared
+updates only existing `testing`, `pause`/`paused`, or blank cells, using exact unshared
 Creative Ad Code bindings. Any ACTIVE ad means `testing`; exclusively paused
-ads mean `pause`. T0 and other manual statuses, unknown statuses, and unmatched
+ads mean `pause` (or the existing dropdown's `paused` spelling). Dropdown options
+are never modified. T0 and other manual statuses, unknown statuses, and unmatched
 or shared ad bindings remain unchanged. No Organic new rows
 are added by Slack. API failure prevents any Organic write. Native snapshots,
 pre-write change detection and readback verification protect the existing sheet.

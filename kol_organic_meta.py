@@ -75,7 +75,7 @@ def plan(values, content):
     return planned, skipped
 
 
-def status_plan(values, ads):
+def status_plan(values, ads, cells=None):
     """Only exact, unshared Ad Code bindings can change automatic statuses."""
     from update_meta_tracker import exact_mapping
     rows = []
@@ -90,11 +90,22 @@ def status_plan(values, ads):
     for number, ids in matches.items():
         row = values[number-1]
         current = row[5] if len(row) > 5 else ''
-        if str(current).strip().lower() not in ['', 'testing', 'pause']:
+        if str(current).strip().lower() not in ['', 'testing', 'pause', 'paused']:
             continue
         statuses = {by_id[aid].get('effective_status') for aid in ids}
         value = ('testing' if 'ACTIVE' in statuses else 'pause'
                  if statuses and statuses.issubset({'PAUSED', 'ADSET_PAUSED', 'CAMPAIGN_PAUSED'}) else None)
+        if value is not None and cells is not None:
+            row_cells = cells[number-1].get('values', [])
+            target = row_cells[5] if len(row_cells) > 5 else {}
+            rule = target.get('dataValidation', {})
+            condition = rule.get('condition', {})
+            if condition.get('type') == 'ONE_OF_LIST':
+                allowed = [v.get('userEnteredValue') for v in condition.get('values', [])]
+                if value == 'pause' and value not in allowed and 'paused' in allowed:
+                    value = 'paused'
+                if value not in allowed:
+                    continue
         if value is not None and value != current:
             result.append({'row': number, 'ad_ids': ids, 'changes': {5: value}})
     return result
@@ -112,7 +123,7 @@ def run(env, output, apply):
              for row in values[2:] if len(row) > 3 and row[0] and post_key(row[3])]
     planned, skipped = plan(values, fetch_content(env, links))
     _, ads = meta_inventory(env)
-    statuses = status_plan(values, ads)
+    statuses = status_plan(values, ads, native['sheets'][0]['data'][0]['rowData'])
     save_json(output / 'Organic-Meta-plan.json', {'basis': 'API organic_insights; no paid totals',
                                                'planned': planned, 'skipped': skipped, 'status_updates': statuses})
     print('Organic Meta planned: %d; skipped: %d' % (len(planned), len(skipped)), flush=True)
