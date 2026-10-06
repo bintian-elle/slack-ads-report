@@ -144,3 +144,10 @@ or shared ad bindings remain unchanged. No Organic new rows
 are added by Slack. API failure prevents any Organic write. Native snapshots,
 pre-write change detection and readback verification protect the existing sheet.
 `daily` is read-only by default; `daily --apply` is used by the existing timer.
+Organic F1 is updated to `[MM/DD update]` in America/Chicago time in the same
+atomic batch as successful content updates. Failed fetches/writes do not advance
+F1; runs without writable data do not advance it. All other headers are preserved.
+Progress logs show content batches and the ad status query stage.
+For Organic-only preview: `.venv-kol/bin/python kol_tracker.py organic`.
+For Organic-only write: `.venv-kol/bin/python kol_tracker.py organic --apply`.
+Both share the existing tracker lock; no extra timer or robot restart is needed.

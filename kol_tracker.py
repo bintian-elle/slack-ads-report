@@ -446,7 +446,7 @@ def tiktok_daily(env, output, apply):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('task', choices=['poll', 'daily', 'check'])
+    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'check'])
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
     load_dotenv(BASE / '.env')
@@ -457,7 +457,7 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if args.task != 'daily':
+            if args.task not in ['daily', 'organic']:
                 print('Another tracker task is running; skipped', flush=True); return
             print('Another tracker task is running; daily update queued', flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -471,6 +471,8 @@ def main():
             print('Tracker configuration check passed; no writes'); return
         if args.task == 'poll':
             poll(env, state_dir / 'slack-state.json', output, args.apply)
+        elif args.task == 'organic':
+            organic_meta_daily(env, output, args.apply)
         else:
             failures = []
             for name, action in [('Meta', lambda: meta_daily(env, output, args.apply)),

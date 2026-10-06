@@ -2,6 +2,8 @@
 import json
 import math
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -21,6 +23,7 @@ def fetch_content(env, links):
     session.headers['Authorization'] = 'Bearer ' + token
     unique = sorted(set(links))
     for offset in range(0, len(unique), 5):
+        print('Organic Meta content batch %d/%d' % (offset // 5 + 1, (len(unique)+4)//5), flush=True)
         response = session.get(base + '/' + business + '/partnership-ads-advertisable-content',
             params={'ig_user_id': account, 'permalinks': json.dumps(unique[offset:offset+5]),
                     'fields': 'content_id,permalink,organic_insights{views,interaction,likes,comments,shares,saves}'},
@@ -119,9 +122,11 @@ def run(env, output, apply):
     prop, native, values = read_tab(session, endpoint, 'Meta-IG')
     # Validate schema before making API calls.
     plan(values, {})
+    print('Organic Meta sheet read; fetching natural metrics', flush=True)
     links = ['https://www.instagram.com/reel/' + post_key(row[3]) + '/'
              for row in values[2:] if len(row) > 3 and row[0] and post_key(row[3])]
     planned, skipped = plan(values, fetch_content(env, links))
+    print('Organic Meta natural metrics fetched; fetching ad statuses', flush=True)
     _, ads = meta_inventory(env)
     statuses = status_plan(values, ads, native['sheets'][0]['data'][0]['rowData'])
     save_json(output / 'Organic-Meta-plan.json', {'basis': 'API organic_insights; no paid totals',
@@ -147,6 +152,15 @@ def run(env, output, apply):
             expected_row[col]['userEnteredValue'] = request['updateCells']['rows'][0]['values'][0]['userEnteredValue']
     if not body:
         return
+    # One atomic batch: the date cannot advance if the metrics write fails.
+    stamp = datetime.now(ZoneInfo('America/Chicago')).strftime('[%m/%d update]')
+    header = cells[0].get('values', [])
+    verify_literal_target(header[5] if len(header) > 5 else {}, stamp)
+    request = write_range(prop['sheetId'], 1, 5, [stamp])
+    body.append(request)
+    expected_header = expected_rows[0].setdefault('values', [])
+    expected_header.extend({} for _ in range(max(0, 6-len(expected_header))))
+    expected_header[5]['userEnteredValue'] = request['updateCells']['rows'][0]['values'][0]['userEnteredValue']
     save_json(output / 'Organic-Meta-before.json', native)
     if read_tab(session, endpoint, 'Meta-IG')[1] != native:
         raise RuntimeError('Organic sheet changed; no write')
@@ -163,3 +177,4 @@ def run(env, output, apply):
     if expected != after:
         raise RuntimeError('Organic native readback failed; inspect backup')
     print('Organic Meta natural metrics verified', flush=True)
+    print('Organic Meta F1 verified: ' + stamp, flush=True)

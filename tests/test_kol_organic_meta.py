@@ -1,6 +1,8 @@
 import unittest
-from unittest.mock import patch
-from kol_organic_meta import fetch_content, plan, post_key, status_plan
+import copy
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+from kol_organic_meta import fetch_content, plan, post_key, status_plan, run
 
 
 HEADERS = ['Creator', 'Organic Launch Date', 'Content Brief', 'Post Link', 'Ad Code',
@@ -8,6 +10,41 @@ HEADERS = ['Creator', 'Organic Launch Date', 'Content Brief', 'Post Link', 'Ad C
 
 
 class OrganicTests(unittest.TestCase):
+    def test_f1_is_atomic_with_metrics_and_verified(self):
+        values = self.values()
+        native = {'sheets': [{'data': [{'rowData': [
+            {'values': [{} for _ in range(15)]} for _ in range(3)]}]}]}
+        after = copy.deepcopy(native)
+        after['sheets'][0]['data'][0]['rowData'][0]['values'][5] = {
+            'userEnteredValue': {'stringValue': '[10/06 update]'}}
+        for col, value in [(7, 100), (13, 12000)]:
+            after['sheets'][0]['data'][0]['rowData'][2]['values'][col] = {
+                'userEnteredValue': {'numberValue': value}}
+        session = MagicMock()
+        with patch('kol_tracker.sheet_session', return_value=(session, 'test-endpoint')), \
+             patch('kol_tracker.read_tab', side_effect=[({'sheetId': 0}, native, values),
+                 ({'sheetId': 0}, native, values), ({'sheetId': 0}, after, values)]), \
+             patch('kol_tracker.save_json'), patch('kol_tracker.meta_inventory', return_value=({}, [])), \
+             patch('kol_organic_meta.fetch_content', return_value={'ABC': {
+                 'content_id': '1', 'organic_insights': {'views': 100}}}), \
+             patch('kol_organic_meta.datetime') as clock:
+            clock.now.return_value.strftime.return_value = '[10/06 update]'
+            run({'KOL_ORGANIC_SHEETS_LINK': 'test'}, Path('/tmp'), True)
+        self.assertEqual(session.post.call_count, 1)
+        requests = session.post.call_args.kwargs['json']['requests']
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(requests[-1]['updateCells']['range']['startRowIndex'], 0)
+        self.assertEqual(requests[-1]['updateCells']['range']['startColumnIndex'], 5)
+
+    def test_failed_fetch_never_writes_f1_or_metrics(self):
+        session = MagicMock()
+        with patch('kol_tracker.sheet_session', return_value=(session, 'test')), \
+             patch('kol_tracker.read_tab', return_value=({}, {}, self.values())), \
+             patch('kol_organic_meta.fetch_content', side_effect=RuntimeError('API failed')):
+            with self.assertRaises(RuntimeError):
+                run({'KOL_ORGANIC_SHEETS_LINK': 'test'}, Path('/tmp'), True)
+        session.post.assert_not_called()
+
     def test_uses_shared_meta_token_without_temporary_token(self):
         with patch('kol_organic_meta.requests.Session') as session:
             session.return_value.get.return_value.ok = True
