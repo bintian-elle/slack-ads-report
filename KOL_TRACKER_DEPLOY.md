@@ -120,12 +120,13 @@ TikTok 官方 Postman 集合列出只读 `GET /open_api/v1.3/tt_video/info/`，
 
 When `KOL_ORGANIC_SHEETS_LINK` is configured, the existing daily KOL task also
 updates its `Meta-IG` tab at the existing America/Chicago 08:00 schedule.
-Requires `KOL_ORGANIC_META_ACCESS_TOKEN` with `business_management`,
+Uses the shared `META_ACCESS_TOKEN` with `business_management`,
 `instagram_basic`, and `instagram_branded_content_ads_brand`, plus access to
 the configured brand assets. Optional IDs: `KOL_ORGANIC_META_BUSINESS_ID`
 (default `997763325183322`) and `KOL_ORGANIC_META_IG_USER_ID`
 (default `17841448894150543`). Use a production-valid token; Explorer short-lived
-tokens can expire before the next daily run.
+tokens can expire before the next daily run. `KOL_ORGANIC_META_ACCESS_TOKEN`
+is no longer used; keep the shared token valid for both Ads and Organic.
 
 `kol_organic_meta.py` queries Partnership Ads Content Discovery by exact post
 permalink in batches of five. H:M use only `organic_insights` (views, interaction,

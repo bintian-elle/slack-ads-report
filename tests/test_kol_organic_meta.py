@@ -1,5 +1,6 @@
 import unittest
-from kol_organic_meta import plan, post_key, status_plan
+from unittest.mock import patch
+from kol_organic_meta import fetch_content, plan, post_key, status_plan
 
 
 HEADERS = ['Creator', 'Organic Launch Date', 'Content Brief', 'Post Link', 'Ad Code',
@@ -7,6 +8,15 @@ HEADERS = ['Creator', 'Organic Launch Date', 'Content Brief', 'Post Link', 'Ad C
 
 
 class OrganicTests(unittest.TestCase):
+    def test_uses_shared_meta_token_without_temporary_token(self):
+        with patch('kol_organic_meta.requests.Session') as session:
+            session.return_value.get.return_value.ok = True
+            session.return_value.get.return_value.json.return_value = {'data': []}
+            self.assertEqual(fetch_content({'META_ACCESS_TOKEN': 'shared-test-token'},
+                                          ['https://www.instagram.com/reel/ABC/']), {})
+            session.return_value.headers.__setitem__.assert_called_with(
+                'Authorization', 'Bearer shared-test-token')
+
     def values(self):
         return [[], HEADERS, ['leen', '', '', 'https://www.instagram.com/reels/ABC/?x=1', '', 'T0', 1200]]
 

@@ -12,7 +12,7 @@ def post_key(value):
 
 
 def fetch_content(env, links):
-    token = env['KOL_ORGANIC_META_ACCESS_TOKEN']
+    token = env['META_ACCESS_TOKEN']
     base = 'https://graph.facebook.com/' + env.get('KOL_TRACKER_META_API_VERSION', 'v23.0')
     business = env.get('KOL_ORGANIC_META_BUSINESS_ID', '997763325183322')
     account = env.get('KOL_ORGANIC_META_IG_USER_ID', '17841448894150543')

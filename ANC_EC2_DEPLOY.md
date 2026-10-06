@@ -9,8 +9,9 @@ delete runtime data, or run both old and new hosts' schedules.
 
 Run on the new EC2. Keep the existing `.env`, credentials and data directories.
 Update these keys in `.env` using an editor, without printing secrets:
-`KOL_ORGANIC_SHEETS_LINK`, `KOL_ORGANIC_META_ACCESS_TOKEN`, and, if needed,
-`KOL_TRACKER_TIKTOK_ACCESS_TOKEN`. Organic token must be valid for production.
+`KOL_ORGANIC_SHEETS_LINK`, the shared `META_ACCESS_TOKEN`, and, if needed,
+`KOL_TRACKER_TIKTOK_ACCESS_TOKEN`. The shared Meta token must be valid for Ads
+and Organic in production; no separate `KOL_ORGANIC_META_ACCESS_TOKEN` is used.
 Optional Organic business/Instagram IDs are documented in KOL_TRACKER_DEPLOY.md.
 Do not replace the robot's existing configuration wholesale.
 
