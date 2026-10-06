@@ -20,7 +20,8 @@ from google.oauth2.service_account import Credentials
 from add_tiktok_tracker_rows import MARKER, URL, creator_heading, plain_text, post_key as tt_post, spark_codes
 from sync_creator_tracker import BASE, code_key as meta_code, get_json, graph_pages, ad_location, post_key as ig_post
 from update_meta_tracker import exact_mapping, new_row_status, run as meta_daily, write_range
-from update_tiktok_tracker import creator_segment, fetch_report, normalized
+from update_tiktok_tracker import creator_segment, fetch_report, fetch_ad_details, normalized
+from kol_organic_meta import run as organic_meta_daily
 
 CHICAGO = ZoneInfo('America/Chicago')
 
@@ -320,9 +321,10 @@ def poll(env, state_path, output, apply):
     print(json.dumps(report, ensure_ascii=False), flush=True)
 
 
-def tiktok_bindings(values, ads):
-    """N is the persisted binding; only new unbound rows use name + date."""
+def tiktok_bindings(values, ads, details=None):
+    """Exact post IDs precede provisional names; never silently replace N."""
     byid = {a['dimensions']['ad_id']: a for a in ads}
+    detail_byid = {str(a['ad_id']): a for a in (details or [])}
     planned, skipped = [], []
     for index, original in enumerate(values[2:], 3):
         if not original or not original[0]:
@@ -332,8 +334,27 @@ def tiktok_bindings(values, ads):
         if binding and not re.fullmatch(r'\d{10,}(?:[\s,;]+\d{10,})*', binding):
             skipped.append({'row': index, 'reason': 'Invalid persisted Ad IDs'}); continue
         ids = re.findall(r'\d{10,}', binding)
+        method = 'persisted_ad_ids' if ids else 'name_date_provisional'
+        video = re.search(r'/video/(\d+)', str(row[3]))
+        post_id = video.group(1) if video else None
+        exact = sorted({str(a['ad_id']) for a in (details or [])
+                        if post_id and str(a.get('tiktok_item_id', '')) == post_id})
+        if ids and post_id and details is not None:
+            conflicts = [aid for aid in ids if aid in detail_byid
+                         and detail_byid[aid].get('tiktok_item_id')
+                         and str(detail_byid[aid]['tiktok_item_id']) != post_id]
+            if conflicts or (exact and set(exact) != set(ids)):
+                skipped.append({'row': index, 'reason': 'Post ID conflicts with persisted binding; preserve row'}); continue
+            if exact:
+                method = 'post_id_exact_verified_binding'
         if not ids and str(row[5]).lower() in ['pause', 'paused']:
-            skipped.append({'row': index, 'reason': 'Historical paused row without Ad IDs'}); continue
+            skipped.append({'row': index, 'reason': 'Historical paused row without Ad IDs',
+                            'exact_candidate_ids': exact}); continue
+        if not ids and exact:
+            ids = exact
+            method = 'post_id_exact'
+        if not ids and post_id and details is not None:
+            skipped.append({'row': index, 'reason': 'No exact Post ID match; no name-only fallback'}); continue
         if not ids:
             aliases = {normalized(row[0])}
             handle = re.search(r'/@([^/]+)', str(row[3]))
@@ -369,7 +390,7 @@ def tiktok_bindings(values, ads):
                   float(ms[0]['reach']) if len(ms) == 1 else row[10],
                   sum(float(m['video_play_actions']) for m in ms),
                   sum(float(m['video_watched_2s']) for m in ms) / impressions if impressions else None]
-        planned.append({'row': index, 'ad_ids': ids, 'metrics': metric, 'preserve': [9, 10] if len(ms) > 1 else [], 'new_binding': not bool(row[13])})
+        planned.append({'row': index, 'ad_ids': ids, 'metrics': metric, 'preserve': [9, 10] if len(ms) > 1 else [], 'new_binding': not bool(binding), 'match_method': method})
     claims = Counter(aid for p in planned for aid in p['ad_ids'])
     accepted = [p for p in planned if all(claims[aid] == 1 for aid in p['ad_ids'])]
     skipped.extend({'row': p['row'], 'reason': 'Ad claimed by multiple rows'} for p in planned if p not in accepted)
@@ -379,7 +400,8 @@ def tiktok_bindings(values, ads):
 def tiktok_daily(env, output, apply):
     session, endpoint = sheet_session(env)
     prop, native, values = read_tab(session, endpoint, 'TikTok')
-    planned, skipped = tiktok_bindings(values, fetch_report(env))
+    details = fetch_ad_details(env)
+    planned, skipped = tiktok_bindings(values, fetch_report(env), details)
     save_json(output / 'TikTok-daily-plan.json', {'planned': planned, 'skipped': skipped, 'window': 'API lifetime through request time'})
     print('TikTok metrics planned: %d; skipped: %d' % (len(planned), len(skipped)), flush=True)
     if not apply or not planned:
@@ -452,7 +474,9 @@ def main():
         else:
             failures = []
             for name, action in [('Meta', lambda: meta_daily(env, output, args.apply)),
-                                 ('TikTok', lambda: tiktok_daily(env, output, args.apply))]:
+                                 ('TikTok', lambda: tiktok_daily(env, output, args.apply))] + (
+                                 [('Organic Meta', lambda: organic_meta_daily(env, output, args.apply))]
+                                 if env.get('KOL_ORGANIC_SHEETS_LINK') else []):
                 try:
                     action()
                 except Exception as error:

@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from kol_tracker import dedup_new, new_row, parse_messages, read_incremental_slack, tiktok_bindings
 from test_tiktok_name_matching import ad
+from update_tiktok_tracker import fetch_ad_details
 
 CODE = 'AbCd1234+/EFgh5678IJkl9012MNop3456QRst7890UVwxYZ=='
 LINK = 'https://www.tiktok.com/@joe/video/1234567890123456789'
@@ -84,3 +85,54 @@ class ProductionTrackerTests(unittest.TestCase):
         self.assertEqual(pages.call_count, 2)
         self.assertEqual(len(messages), 2)
         self.assertEqual(state['cursor'], 210)
+
+    def test_exact_post_ignores_creator_alias_and_date(self):
+        record = ad('different_name', '1873538721081441')
+        detail = {'ad_id': '1873538721081441', 'tiktok_item_id': '1234567890123456789'}
+        rows = [[], [], ['Joe', '', '', LINK, '', 'testing']]
+        planned, skipped = tiktok_bindings(rows, [record], [detail])
+        self.assertFalse(skipped)
+        self.assertEqual(planned[0]['match_method'], 'post_id_exact')
+        self.assertTrue(planned[0]['new_binding'])
+
+    def test_explicit_post_without_match_cannot_guess_name(self):
+        serial = (datetime(2026, 1, 1).date() - datetime(1899, 12, 30).date()).days
+        rows = [[], [], ['Josh', '', '', LINK, serial, 'testing']]
+        self.assertFalse(tiktok_bindings(rows, [ad('260101_ROPOT_Spark_Josh_HP')], [])[0])
+
+    def test_exact_post_conflict_keeps_existing_binding(self):
+        rows = [[], [], ['Josh', '', '', LINK, '', 'testing', '', '', '', '', '', '', '', '1873538721081441']]
+        details = [{'ad_id': '1873538721081441', 'tiktok_item_id': '9999999999999999999'}]
+        planned, skipped = tiktok_bindings(rows, [ad('different', '1873538721081441')], details)
+        self.assertFalse(planned)
+        self.assertIn('conflicts', skipped[0]['reason'])
+
+    def test_exact_paused_candidates_reported_not_written(self):
+        rows = [[], [], ['Josh', '', '', LINK, '', 'paused']]
+        details = [{'ad_id': '1873538721081441', 'tiktok_item_id': '1234567890123456789'}]
+        planned, skipped = tiktok_bindings(rows, [ad('different', '1873538721081441')], details)
+        self.assertFalse(planned)
+        self.assertEqual(skipped[0]['exact_candidate_ids'], ['1873538721081441'])
+
+    def test_new_exact_ad_group_does_not_expand_existing_binding(self):
+        rows = [[], [], ['Josh', '', '', LINK, '', 'testing', '', '', '', '', '', '', '', '1873538721081441']]
+        details = [{'ad_id': x, 'tiktok_item_id': '1234567890123456789'} for x in ['1873538721081441', '1873538721081442']]
+        planned, skipped = tiktok_bindings(rows, [ad('different', x['ad_id']) for x in details], details)
+        self.assertFalse(planned)
+        self.assertIn('conflicts', skipped[0]['reason'])
+
+    def test_details_reads_every_page_with_kol_token(self):
+        env = {'KOL_TRACKER_TIKTOK_ACCESS_TOKEN': 'new-test-token', 'TIKTOK_ACCESS_TOKEN': 'old-test-token', 'TIKTOK_ADVERTISER_IDS': '123'}
+        with patch('update_tiktok_tracker.requests.Session') as session, patch('update_tiktok_tracker.get_json', side_effect=[
+            {'code': 0, 'data': {'list': [{'ad_id': '1'}], 'page_info': {'total_page': 2}}},
+            {'code': 0, 'data': {'list': [{'ad_id': '2'}], 'page_info': {'total_page': 2}}},
+        ]) as get:
+            result = fetch_ad_details(env)
+        self.assertEqual([x['ad_id'] for x in result], ['1', '2'])
+        self.assertEqual([x.args[2]['page'] for x in get.call_args_list], [1, 2])
+        session.return_value.headers.__setitem__.assert_called_with('Access-Token', 'new-test-token')
+
+    def test_details_permission_error_fails_closed(self):
+        with patch('update_tiktok_tracker.get_json', return_value={'code': 40001}):
+            with self.assertRaises(RuntimeError):
+                fetch_ad_details({'TIKTOK_ACCESS_TOKEN': 'test', 'TIKTOK_ADVERTISER_IDS': '123'})

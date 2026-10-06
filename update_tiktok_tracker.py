@@ -56,6 +56,29 @@ def fetch_report(env):
     return records
 
 
+def fetch_ad_details(env):
+    """Read the full regular-ad inventory, including Spark post identifiers."""
+    token = env.get('KOL_TRACKER_TIKTOK_ACCESS_TOKEN') or env['TIKTOK_ACCESS_TOKEN']
+    raw = env['TIKTOK_ADVERTISER_IDS'].strip()
+    accounts = json.loads(raw) if raw.startswith('[') else raw.split(',')
+    session = requests.Session()
+    session.headers['Access-Token'] = token
+    records = []
+    for account in accounts:
+        page = 1
+        while True:
+            result = get_json(session, 'https://business-api.tiktok.com/open_api/v1.3/ad/get/', {
+                'advertiser_id': str(account).strip(), 'page': page, 'page_size': 100})
+            if result.get('code') != 0:
+                raise RuntimeError('TikTok ad details failed; code=%s' % result.get('code'))
+            data = result['data']
+            records.extend(dict(ad, advertiser_id=str(account).strip()) for ad in data['list'])
+            if page >= int(data['page_info']['total_page']):
+                break
+            page += 1
+    return records
+
+
 def plan_rows(values, records):
     counts = Counter(normalized(row[0]) for row in values[2:] if row and row[0])
     decisions = []

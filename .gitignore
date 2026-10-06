@@ -12,3 +12,4 @@ credentials/*
 data/processed/*
 !data/processed/.gitkeep
 .venv-kol/
+.env.before-kol-token
