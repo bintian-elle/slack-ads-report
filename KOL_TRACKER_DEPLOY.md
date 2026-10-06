@@ -135,7 +135,12 @@ existing manually maintained G fee: fee/views*1000 and fee/interaction.
 Existing N:O formulas are preserved; literal cells are recalculated when inputs
 are valid. Null/missing metrics and unmatched posts retain existing values,
 with omissions in the private run plan; zero denominators retain derived values.
-Manual A:E and G, notes, row order and headers remain unchanged. Organic F
+Manual A:D and G, notes, row order and headers remain unchanged. Existing E
+Ad Codes are never overwritten. Blank E cells can be filled only when the exact
+Instagram post shortcode uniquely matches Meta Ads Tracker G:H and that Code
+also exactly matches a live API Creative. Conflicting post/code identities and
+Ad IDs shared by multiple Organic rows are rejected. This is not a direct
+Post Link-to-Ad Code API conversion. Organic F
 updates only existing `testing`, `pause`/`paused`, or blank cells, using exact unshared
 Creative Ad Code bindings. Any ACTIVE ad means `testing`; exclusively paused
 ads mean `pause` (or the existing dropdown's `paused` spelling). Dropdown options

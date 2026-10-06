@@ -43,6 +43,7 @@ class Settings:
     meta_ad_account_id: str
     tiktok_access_token: str
     tiktok_advertiser_ids: str
+    chatgpt_ads_token: str
     google_ads_raw_tab: str
 
 
@@ -86,5 +87,6 @@ def load_settings() -> Settings:
         meta_ad_account_id=os.getenv("META_AD_ACCOUNT_ID", "").strip(),
         tiktok_access_token=os.getenv("TIKTOK_ACCESS_TOKEN", "").strip(),
         tiktok_advertiser_ids=os.getenv("TIKTOK_ADVERTISER_IDS", "").strip(),
+        chatgpt_ads_token=os.getenv("CHATGPT_ADS_TOKEN", "").strip(),
         google_ads_raw_tab=os.getenv("GOOGLE_ADS_RAW_TAB", "Google Ads Raw").strip(),
     )

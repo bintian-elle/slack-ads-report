@@ -14,6 +14,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from bing_service import BingAdsService
+from chatgpt_ads_service import ChatGPTAdsService
 from config import load_settings
 from google_sheets_service import GoogleSheetsService
 from google_ads_sheet_service import GoogleAdsSheetService
@@ -126,6 +127,16 @@ def generate_daily_report(
             report_date,
             tiktok_metrics.spend,
             tiktok_metrics.roas,
+        )
+    if not any(metric.name == "ChatGPT" for metric in metrics):
+        chatgpt = ChatGPTAdsService(settings.chatgpt_ads_token)
+        chatgpt_metrics = chatgpt.fetch_daily_metrics(report_date)
+        metrics.append(chatgpt_metrics)
+        logging.info(
+            "ChatGPT Ads report loaded for %s: spend=%s roas=%.2f",
+            report_date,
+            chatgpt_metrics.spend,
+            chatgpt_metrics.roas,
         )
     if not any(metric.name == "Shopify" for metric in metrics):
         shopify = ShopifyService(

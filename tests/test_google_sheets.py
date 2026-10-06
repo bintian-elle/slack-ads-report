@@ -24,6 +24,12 @@ class GoogleSheetsTabSelectionTests(unittest.TestCase):
             "=M93+O93+Q93+S93+U93+W93+Y93+AA93+AC93",
         )
 
+    def test_chatgpt_layout_includes_chatgpt_in_total_spend(self):
+        self.assertEqual(
+            build_actual_total_spend_formula(73, has_chatgpt=True),
+            "=M73+O73+Q73+S73+U73+W73+Y73+AA73+AC73+AE73",
+        )
+
     def test_parses_abbreviated_month(self):
         self.assertEqual(
             parse_budget_pacing_tab("26 Aug - Budget Pacing"),
@@ -93,6 +99,18 @@ class GoogleSheetsTabSelectionTests(unittest.TestCase):
         header[32] = "google ads ROAS"
         validate_actual_pacing_headers([["Actual Pacing"], header])
 
+    def test_validates_chatgpt_layout_headers(self):
+        header = [""] * 35
+        header[5] = "Total Shopify Revenue(RO System Only)"
+        header[6] = "Total Shopify Revenue"
+        header[12:18] = ["PMAX Spend", "PMAX ROAS", "Search Spend", "Search ROAS",
+                         "Shopping Spend", "Shopping ROAS"]
+        header[24:30] = ["Google DG Spend", "DG ROAS", "TikTok Spend", "ROAS",
+                         "Reddit Spend", "Reddit ROAS"]
+        header[30:35] = ["ChatGPT Spend", "ChatGPT ROAS", "Meta ATC",
+                         "google ads spend", "google ads ROAS"]
+        self.assertTrue(validate_actual_pacing_headers([["Actual Pacing"], header]))
+
     def test_builds_google_and_reddit_cell_values(self):
         values = build_actual_pacing_values(
             [
@@ -129,6 +147,21 @@ class GoogleSheetsTabSelectionTests(unittest.TestCase):
         )
         self.assertEqual(values["AA"], 50.0)
         self.assertEqual(values["AB"], 2.0)
+
+    def test_maps_chatgpt_and_shifted_october_columns(self):
+        values = build_actual_pacing_values(
+            [
+                ChannelMetrics("ChatGPT", Decimal("34.17"), Decimal("0")),
+                ChannelMetrics("Meta", Decimal("10"), Decimal("20"), Decimal("3")),
+                ChannelMetrics("Pmax", Decimal("5"), Decimal("15")),
+            ],
+            has_chatgpt=True,
+        )
+        self.assertEqual(values["AE"], 34.17)
+        self.assertEqual(values["AF"], 0.0)
+        self.assertEqual(values["AG"], 3.0)
+        self.assertEqual(values["AH"], 5.0)
+        self.assertEqual(values["AI"], 3.0)
 
     def test_extracts_mtd_summary_by_label_from_any_columns(self):
         summary = extract_mtd_summary(

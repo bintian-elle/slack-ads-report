@@ -208,6 +208,7 @@ def save_processed_csv(
         "Google DG",
         "TikTok",
         "Reddit",
+        "ChatGPT",
     )
     ordered_rows = [
         row_by_name[name] for name in preferred_order if name in row_by_name
@@ -348,6 +349,8 @@ def format_slack_report(
         total_spend_channels = set(required_spend_channels)
         if "TikTok" in row_by_name:
             total_spend_channels.add("TikTok")
+        if "ChatGPT" in row_by_name:
+            total_spend_channels.add("ChatGPT")
         total_spend = (
             sum(
                 (row_by_name[name].spend for name in total_spend_channels),
@@ -454,6 +457,7 @@ def format_slack_report(
         spend_roas_line("Google DG", "Google DG"),
         tiktok_line,
         reddit_line,
+        spend_roas_line("ChatGPT", "ChatGPT"),
         google_line,
     ]
     if mtd_summary is not None:

@@ -37,6 +37,8 @@ ACTUAL_PACING_COLUMNS = {
     "TikTok ROAS": "AB",
     "Reddit Spend": "AC",
     "Reddit ROAS": "AD",
+    "ChatGPT Spend": "AE",
+    "ChatGPT ROAS": "AF",
     "Meta ATC": "AE",
     "Google Ads Spend": "AF",
     "Google Ads ROAS": "AG",
@@ -306,7 +308,10 @@ def build_actual_total_spend_formula(row_number: int, has_chatgpt: bool = False)
     return "=" + "+".join(f"{column}{row_number}" for column in columns)
 
 
-def build_actual_pacing_values(metrics: Iterable[ChannelMetrics]) -> Dict[str, object]:
+def build_actual_pacing_values(
+    metrics: Iterable[ChannelMetrics],
+    has_chatgpt: bool = False,
+) -> Dict[str, object]:
     """Map available channel metrics to Actual Pacing column letters."""
     rows = _aggregate_by_name(metrics)
     values: Dict[str, object] = {}
@@ -372,6 +377,18 @@ def build_actual_pacing_values(metrics: Iterable[ChannelMetrics]) -> Dict[str, o
         values["AG"] = _sheet_number(
             calculate_roas(google_revenue, google_spend)
         )
+
+    if has_chatgpt:
+        # The October+ layout inserts ChatGPT before Meta ATC and Google totals.
+        remap = {"AE": "AG", "AF": "AH", "AG": "AI"}
+        values = {
+            remap.get(column, column): value
+            for column, value in values.items()
+        }
+        chatgpt = rows.get("ChatGPT")
+        if chatgpt is not None:
+            values["AE"] = _sheet_number(chatgpt.spend)
+            values["AF"] = _sheet_number(chatgpt.roas)
 
     return values
 
@@ -457,15 +474,15 @@ class GoogleSheetsService:
         metrics: Iterable[ChannelMetrics],
     ) -> dict:
         """Write available metrics and verify the resulting cell values."""
+        metrics = list(metrics)
         tab_name = select_budget_pacing_tab(self.list_tab_titles(), report_date)
         rows = self._read_tab_rows(tab_name)
         has_chatgpt = validate_actual_pacing_headers(rows)
         row_number = locate_actual_pacing_row(rows, report_date)
-        values_by_column = build_actual_pacing_values(metrics)
-        if has_chatgpt:
-            remap = {"AE": "AG", "AF": "AH", "AG": "AI"}
-            values_by_column = {remap.get(column, column): value
-                                for column, value in values_by_column.items()}
+        values_by_column = build_actual_pacing_values(
+            metrics,
+            has_chatgpt=has_chatgpt,
+        )
         if not values_by_column:
             raise ValueError("No supported advertising metrics were available to write.")
         # D drives the monthly paid-media totals and pacing formulas. Write it

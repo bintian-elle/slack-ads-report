@@ -2,7 +2,7 @@ import unittest
 import copy
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from kol_organic_meta import fetch_content, plan, post_key, status_plan, run
+from kol_organic_meta import fetch_content, plan, post_key, status_plan, code_plan, run
 
 
 HEADERS = ['Creator', 'Organic Launch Date', 'Content Brief', 'Post Link', 'Ad Code',
@@ -10,6 +10,44 @@ HEADERS = ['Creator', 'Organic Launch Date', 'Content Brief', 'Post Link', 'Ad C
 
 
 class OrganicTests(unittest.TestCase):
+    def test_exact_post_code_backfill_preserves_manual_status(self):
+        ads = [{'id': '1', 'effective_status': 'ACTIVE', 'creative': {
+            'branded_content': {'instagram_boost_post_access_token': 'CODE'}}}]
+        tracker = [[], [], ['', 'leen', '', '', '', '',
+                              'https://www.instagram.com/p/ABC/', 'adcode-CODE']]
+        resolved, codes, issues = code_plan(self.values(), tracker, ads)
+        self.assertEqual(codes[0]['changes'], {4: 'adcode-CODE'})
+        self.assertEqual(resolved[2][5], 'T0')
+        self.assertFalse(status_plan(resolved, ads))
+        self.assertFalse(issues)
+        resolved[2][5] = ''
+        self.assertEqual(status_plan(resolved, ads)[0]['changes'], {5: 'testing'})
+
+    def test_ambiguous_unverified_and_shared_codes_never_fill(self):
+        ads = [{'id': '1', 'creative': {'branded_content': {
+            'instagram_boost_post_access_token': 'CODE'}}}]
+        first = ['', '', '', '', '', '', 'https://www.instagram.com/reel/ABC/', 'CODE']
+        second = first.copy()
+        second[7] = 'OTHER'
+        self.assertFalse(code_plan(self.values(), [[], [], first, second], ads)[1])
+        self.assertFalse(code_plan(self.values(), [[], [], first], [])[1])
+        duplicated = self.values() + [self.values()[2].copy()]
+        resolved, codes, issues = code_plan(duplicated, [[], [], first], ads)
+        self.assertFalse(codes)
+        self.assertEqual(len(issues), 2)
+        self.assertFalse(status_plan(resolved, ads))
+
+    def test_existing_code_is_not_overwritten_on_link_conflict(self):
+        values = self.values()
+        values[2][4:6] = ['EXISTING', 'testing']
+        tracker = [[], [], ['', '', '', '', '', '',
+                              'https://www.instagram.com/reel/ABC/', 'OTHER']]
+        resolved, codes, issues = code_plan(values, tracker, [])
+        self.assertEqual(values[2][4], 'EXISTING')
+        self.assertFalse(codes)
+        self.assertTrue(issues)
+        self.assertEqual(resolved[2][4], '')
+
     def test_f1_is_atomic_with_metrics_and_verified(self):
         values = self.values()
         native = {'sheets': [{'data': [{'rowData': [

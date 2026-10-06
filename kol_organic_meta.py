@@ -114,6 +114,49 @@ def status_plan(values, ads, cells=None):
     return result
 
 
+def code_plan(values, tracker_values, ads):
+    """Bridge exact post links only, with live Creative code validation."""
+    from sync_creator_tracker import code_key
+    from update_meta_tracker import exact_mapping
+    live = {code_key(ad.get('creative', {}).get('branded_content', {}).get(
+        'instagram_boost_post_access_token')) for ad in ads}
+    live.discard('')
+    by_post = {}
+    for row in tracker_values[2:]:
+        if len(row) > 7 and post_key(row[6]) and code_key(row[7]):
+            by_post.setdefault(post_key(row[6]), {})[code_key(row[7])] = row[7]
+    resolved = [list(row) for row in values]
+    updates, issues, blocked = [], [], set()
+    for number, row in enumerate(resolved[2:], 3):
+        if not row or not row[0]:
+            continue
+        row.extend([''] * max(0, 6-len(row)))
+        candidates = by_post.get(post_key(row[3]), {})
+        existing = code_key(row[4])
+        if len(candidates) > 1 or (existing and candidates and existing not in candidates):
+            blocked.add(number)
+            issues.append({'row': number, 'reason': 'Conflicting post/code binding'})
+        elif not existing and len(candidates) == 1:
+            key = next(iter(candidates))
+            if key in live:
+                row[4] = candidates[key]
+                updates.append({'row': number, 'changes': {4: row[4]},
+                                'source': 'Exact Ads Tracker Post Link + live Creative Ad Code'})
+    bindings = []
+    for number, row in enumerate(resolved[2:], 3):
+        if row and row[0] and len(row) > 4 and row[4]:
+            bindings.append((number, ['', row[0], '', '', '', '', '', row[4]]))
+    _, _, conflicts = exact_mapping(bindings, ads)
+    blocked.update(number for numbers in conflicts.values() for number in numbers)
+    for number in sorted({n for ns in conflicts.values() for n in ns}):
+        issues.append({'row': number, 'reason': 'Ad ID claimed by multiple Organic rows'})
+    updates = [item for item in updates if item['row'] not in blocked]
+    # Remove ambiguous bindings from status calculation, without changing sheet values.
+    for number in blocked:
+        resolved[number-1][4] = ''
+    return resolved, updates, issues
+
+
 def run(env, output, apply):
     from kol_tracker import sheet_session, read_tab, save_json, verify_literal_target, meta_inventory
     from update_meta_tracker import write_range
@@ -128,17 +171,25 @@ def run(env, output, apply):
     planned, skipped = plan(values, fetch_content(env, links))
     print('Organic Meta natural metrics fetched; fetching ad statuses', flush=True)
     _, ads = meta_inventory(env)
-    statuses = status_plan(values, ads, native['sheets'][0]['data'][0]['rowData'])
+    tracker_values = []
+    if env.get('KOL_TRACKER_GOOGLE_SHEETS_LINK'):
+        tracker_session, tracker_endpoint = sheet_session(env)
+        _, _, tracker_values = read_tab(tracker_session, tracker_endpoint, 'Meta')
+    resolved, codes, issues = code_plan(values, tracker_values, ads)
+    statuses = status_plan(resolved, ads, native['sheets'][0]['data'][0]['rowData'])
     save_json(output / 'Organic-Meta-plan.json', {'basis': 'API organic_insights; no paid totals',
-                                               'planned': planned, 'skipped': skipped, 'status_updates': statuses})
+                                               'planned': planned, 'skipped': skipped, 'status_updates': statuses,
+                                               'code_updates': codes, 'identity_issues': issues})
     print('Organic Meta planned: %d; skipped: %d' % (len(planned), len(skipped)), flush=True)
     print('Organic Meta automatic status updates: %d' % len(statuses), flush=True)
+    print('Organic Meta exact Post Link code backfills: %d; identity conflicts: %d' %
+          (len(codes), len(issues)), flush=True)
     if not apply:
         return
     cells = native['sheets'][0]['data'][0]['rowData']
     body, expected = [], json.loads(json.dumps(native))
     expected_rows = expected['sheets'][0]['data'][0]['rowData']
-    for item in planned + statuses:
+    for item in planned + codes + statuses:
         for col, value in item['changes'].items():
             row = cells[item['row']-1].get('values', [])
             target = row[col] if col < len(row) else {}
