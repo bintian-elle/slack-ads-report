@@ -88,6 +88,7 @@ class GoogleSheetsTabSelectionTests(unittest.TestCase):
         header[27] = "ROAS"
         header[28] = "Reddit Spend"
         header[29] = "Reddit ROAS"
+        header[30] = "Meta ATC"
         header[31] = "google ads spend"
         header[32] = "google ads ROAS"
         validate_actual_pacing_headers([["Actual Pacing"], header])

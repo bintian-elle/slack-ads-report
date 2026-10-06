@@ -181,7 +181,7 @@ def locate_actual_pacing_row(rows: Sequence[Sequence[object]], report_date: date
     return matching_rows[0]
 
 
-def validate_actual_pacing_headers(rows: Sequence[Sequence[object]]) -> None:
+def validate_actual_pacing_headers(rows: Sequence[Sequence[object]]) -> bool:
     """Verify the known column layout before allowing any write."""
     marker_index = next(
         (
@@ -206,13 +206,25 @@ def validate_actual_pacing_headers(rows: Sequence[Sequence[object]]) -> None:
     if header_row is None:
         raise ValueError("Actual Pacing column header row was not found.")
 
+    # Accept only the verified legacy layout or its ChatGPT-column extension.
+    has_chatgpt = _normalized_text(header_row[30]) == "chatgpt spend"
+    expected_headers = dict(EXPECTED_ACTUAL_HEADERS)
+    if has_chatgpt:
+        expected_headers.pop(31)
+        expected_headers.pop(32)
+        expected_headers.update({30: "chatgpt spend", 31: "chatgpt roas",
+                                 32: "meta atc", 33: "google ads spend",
+                                 34: "google ads roas"})
+    else:
+        expected_headers[30] = "meta atc"
     mismatches = []
-    for column_index, expected in EXPECTED_ACTUAL_HEADERS.items():
-        actual = _normalized_text(header_row[column_index])
+    for column_index, expected in expected_headers.items():
+        actual = _normalized_text(header_row[column_index]) if column_index < len(header_row) else ""
         if actual != expected:
             mismatches.append(f"index {column_index}: expected {expected}, found {actual}")
     if mismatches:
         raise ValueError("Unexpected Actual Pacing layout: " + "; ".join(mismatches))
+    return has_chatgpt
 
 
 def extract_mtd_summary(rows: Sequence[Sequence[object]]) -> Dict[str, str]:
@@ -284,11 +296,13 @@ def _sheet_number(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.01")))
 
 
-def build_actual_total_spend_formula(row_number: int) -> str:
+def build_actual_total_spend_formula(row_number: int, has_chatgpt: bool = False) -> str:
     """Sum every paid channel in one Actual Pacing row, including Sheet TikTok."""
     if row_number < 1:
         raise ValueError("row_number must be positive.")
     columns = ("M", "O", "Q", "S", "U", "W", "Y", "AA", "AC")
+    if has_chatgpt:
+        columns += ("AE",)
     return "=" + "+".join(f"{column}{row_number}" for column in columns)
 
 
@@ -406,7 +420,7 @@ class GoogleSheetsService:
         return [sheet["properties"]["title"] for sheet in payload.get("sheets", [])]
 
     def _read_tab_rows(self, tab_name: str) -> List[List[object]]:
-        range_name = quote(_quoted_range(tab_name, "A1:AI400"), safe="")
+        range_name = quote(_quoted_range(tab_name, "A1:AZ400"), safe="")
         response = self.session.get(
             f"{self.base_url}/values/{range_name}",
             params={
@@ -445,15 +459,19 @@ class GoogleSheetsService:
         """Write available metrics and verify the resulting cell values."""
         tab_name = select_budget_pacing_tab(self.list_tab_titles(), report_date)
         rows = self._read_tab_rows(tab_name)
-        validate_actual_pacing_headers(rows)
+        has_chatgpt = validate_actual_pacing_headers(rows)
         row_number = locate_actual_pacing_row(rows, report_date)
         values_by_column = build_actual_pacing_values(metrics)
+        if has_chatgpt:
+            remap = {"AE": "AG", "AF": "AH", "AG": "AI"}
+            values_by_column = {remap.get(column, column): value
+                                for column, value in values_by_column.items()}
         if not values_by_column:
             raise ValueError("No supported advertising metrics were available to write.")
         # D drives the monthly paid-media totals and pacing formulas. Write it
         # only when the daily report is populated so future blank dates do not
         # count as zero-spend days in COUNT-based pacing calculations.
-        values_by_column["D"] = build_actual_total_spend_formula(row_number)
+        values_by_column["D"] = build_actual_total_spend_formula(row_number, has_chatgpt=has_chatgpt)
 
         data = [
             {
