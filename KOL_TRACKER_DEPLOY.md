@@ -142,9 +142,10 @@ job. Standalone preview: `.venv-kol/bin/python kol_tracker.py organic-tiktok`;
 write: `.venv-kol/bin/python kol_tracker.py organic-tiktok --apply`.
 This uses the public page parser in `get_tiktok_public_data.py`, not Ads API
 metrics. Video IDs are deduplicated; requests have a 3–7 second interval and
-at most one attempt per video per Chicago calendar day (including failed
-attempts). State is persisted before the request. Preview also consumes that
-day's attempt; a later apply reuses successfully cached results. Retain
+at most one attempt per video per run. Successful data is reused for the
+Chicago calendar day; a failed attempt without usable data can retry on a
+later manual run. HTTP 403/429 backoff is never bypassed. Preview caches
+successful results for a later apply. Retain
 `organic-tiktok-state.json` in the configured state directory across deploys.
 HTTP 403/429 stops all remaining public requests without retry, persisting
 at least 24-hour backoff and honoring any longer Retry-After. Redirects are

@@ -99,6 +99,7 @@ def run(env, output, apply):
     backoff_active = bool(state.get('blocked_until') and now < datetime.fromisoformat(state['blocked_until']))
     today = now.astimezone(ZoneInfo('America/Chicago')).date().isoformat()
     results, skipped, attempted, blocked = {}, [], 0, backoff_active
+    seen = set()
     blocked_reason = 'Skipped due to TikTok backoff; existing metrics retained'
     for number, row in enumerate(values[1:], 2):
         if not row or not row[0] or str(row[0]).strip().lower() == 'summary':
@@ -108,18 +109,18 @@ def run(env, output, apply):
         except ValueError:
             skipped.append({'row': number, 'reason': 'Missing or unsupported TikTok link'})
             continue
-        if vid in results:
+        if vid in seen:
             continue
+        seen.add(vid)
         if blocked:
             break
         entry = state['videos'].get(vid, {})
-        if entry.get('day') == today:
-            if entry.get('metrics'):
-                results[vid] = entry['metrics']
+        if entry.get('day') == today and entry.get('metrics'):
+            results[vid] = entry['metrics']
             continue
         if attempted:
             time.sleep(random.uniform(3, 7))
-        # Persist before HTTP so a crash cannot cause a second attempt today.
+        # Keep diagnostics; unsuccessful attempts may retry on a later run.
         state['videos'][vid] = {'day': today}
         save_json(path, state)
         attempted += 1
@@ -161,7 +162,7 @@ def run(env, output, apply):
         else:
             reasons[number] = (blocked_reason if blocked else
                 state['videos'].get(vid,{}).get('reason',
-                    'Request already attempted today without usable data; existing metrics retained'))
+                    'Video data unavailable; existing metrics retained'))
     note_col, notes = note_plan(values,{item['row'] for item in planned},reasons)
     if note_col >= prop['gridProperties']['columnCount']:
         raise RuntimeError('No unused column for failure reasons; no sheet write')

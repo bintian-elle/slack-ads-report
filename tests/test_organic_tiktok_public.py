@@ -20,13 +20,18 @@ class PublicTikTokTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
              patch('kol_tracker.sheet_session',return_value=(Mock(),'endpoint')), \
              patch('kol_tracker.read_tab',return_value=({'gridProperties':{'columnCount':27}}, {},values)), \
-             patch('kol_organic_tiktok.get_tiktok_metrics',side_effect=[ValueError('invalid'),valid]) as get, \
+             patch('kol_organic_tiktok.get_tiktok_metrics',side_effect=[ValueError('invalid'),valid,
+                 dict(valid,video_id='123')]) as get, \
              patch('kol_organic_tiktok.time.sleep'):
             run({'KOL_ORGANIC_SHEETS_LINK':'test','KOL_TRACKER_STATE_DIR':directory},Path(directory)/'run',False)
             self.assertEqual(get.call_count,2)
             plan = json.loads((Path(directory)/'run/Organic-TikTok-plan.json').read_text())
             self.assertEqual([item['row'] for item in plan['planned']],[3])
             self.assertIn('Invalid or missing',str(plan['note_updates']))
+            run({'KOL_ORGANIC_SHEETS_LINK':'test','KOL_TRACKER_STATE_DIR':directory},Path(directory)/'run',False)
+            self.assertEqual(get.call_count,3)  # Failed video retried; successful one cached.
+            plan = json.loads((Path(directory)/'run/Organic-TikTok-plan.json').read_text())
+            self.assertEqual(len(plan['planned']),2)
 
     def test_failure_notes_append_clear_and_preserve_manual(self):
         values = [['Creator','Views'],['a',1],['b',2]]
