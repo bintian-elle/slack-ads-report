@@ -5,11 +5,22 @@ from get_tiktok_public_data import extract_video_id, get_tiktok_metrics, normali
 from kol_organic_tiktok import metric_changes, backoff_until
 from kol_organic_tiktok import run
 from kol_organic_tiktok import note_plan
+from kol_organic_tiktok import preserve_derived_formula
 import tempfile
 from pathlib import Path
 
 
 class PublicTikTokTests(unittest.TestCase):
+    def test_preserve_interaction_cpm_cpe_formulas_and_views_mapping(self):
+        formula = {'userEnteredValue':{'formulaValue':'=SUM(G2:J2)'}}
+        for col in (5,10,11):
+            self.assertTrue(preserve_derived_formula(col,formula))
+        self.assertFalse(preserve_derived_formula(4,formula))
+        self.assertFalse(preserve_derived_formula(5,{'userEnteredValue':{'numberValue':1}}))
+        changes=metric_changes(dict(views=52200,likes=126,comments=4,saves=41,shares=12),None)
+        self.assertEqual(changes[4],52200)
+        self.assertEqual(changes[5],183)
+
     def test_invalid_video_skips_and_continues(self):
         import json
         headers = ['Creator','Organic Launch Date','Post Link','KOL Fee','Views',

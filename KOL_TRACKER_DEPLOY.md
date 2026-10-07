@@ -158,7 +158,9 @@ without an automatic prefix; recovered rows clear managed reasons, while
 manual notes are preserved. Backoff runs issue no public requests and can
 record that reason. Views date advances only when metrics are written.
 E:J receive public lifetime Views, four-part Interaction, Likes, Comments,
-Saves and Shares. K:L use manual D fee for CPM/CPE; existing formulas remain.
+Saves and Shares. F Interaction is computed as likes + comments + saves + shares
+only when it has no formula; existing F formulas are preserved and recalculate
+from refreshed G:J. K:L use manual D fee for CPM/CPE; their formulas remain.
 E1 shows `Views` followed by `[MM/DD update]` on a new line, indicating the
 latest successful batch, not that every video succeeded. Status is untouched.
 

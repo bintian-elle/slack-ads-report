@@ -65,6 +65,11 @@ def metric_changes(metrics, fee):
     return result
 
 
+def preserve_derived_formula(col, target):
+    # F Interaction and K:L CPM/CPE are sheet-derived when formulas exist.
+    return col in (5, 10, 11) and 'formulaValue' in target.get('userEnteredValue', {})
+
+
 def backoff_until(now, retry_after):
     until = now + timedelta(hours=24)
     try:
@@ -180,9 +185,13 @@ def run(env, output, apply):
     def add(number, col, value):
         row = cells[number-1].get('values', [])
         target = row[col] if len(row)>col else {}
-        if col in (10,11) and 'formulaValue' in target.get('userEnteredValue', {}):
+        if preserve_derived_formula(col, target):
             return
-        verify_literal_target(target, value)
+        try:
+            verify_literal_target(target, value)
+        except RuntimeError as error:
+            raise RuntimeError('Organic TikTok protected target at row %d, column %d: %s' %
+                               (number,col+1,error)) from error
         request = write_range(prop['sheetId'], number, col, [value])
         body.append(request)
         dest = expected_rows[number-1].setdefault('values', [])
