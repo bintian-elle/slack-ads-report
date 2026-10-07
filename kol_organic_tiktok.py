@@ -49,7 +49,7 @@ def run(env, output, apply):
     scoped = dict(env, KOL_TRACKER_GOOGLE_SHEETS_LINK=env['KOL_ORGANIC_SHEETS_LINK'])
     session, endpoint = sheet_session(scoped)
     prop, native, values = read_tab(session, endpoint, 'TikTok', validate_tracker=False)
-    headers = [str(v).splitlines()[0].strip() for v in values[0]]
+    headers = [str(v).split('\n', 1)[0].strip() for v in values[0]]
     expected = ['Creator', 'Organic Launch Date', 'Post Link', 'KOL Fee', 'Views',
                 'Interaction', 'Likes', 'Comments', 'Saves', 'Shares', 'CPM', 'CPE']
     if headers[:12] != expected:

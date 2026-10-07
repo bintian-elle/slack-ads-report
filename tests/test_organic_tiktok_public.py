@@ -10,8 +10,8 @@ from pathlib import Path
 
 class PublicTikTokTests(unittest.TestCase):
     def test_daily_dedupe_interval_and_restart(self):
-        headers = ['Creator','Organic Launch Date','Post Link','KOL Fee','Views',
-                   'Interaction','Likes','Comments','Saves','Shares','CPM','CPE']
+        headers = ['Creator','Organic Launch Date','Post Link','KOL Fee','Views\n[10/07 update]',
+                   'Interaction','Likes','Comments','Saves','Shares','CPM','CPE', '', '', '']
         values = [headers,['a','','https://www.tiktok.com/@a/video/123',100],
                   ['duplicate','','https://www.tiktok.com/@a/video/123',100],
                   ['b','','https://www.tiktok.com/@b/video/456',100]]
