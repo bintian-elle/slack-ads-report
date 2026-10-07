@@ -77,7 +77,9 @@ def main():
 
 
 def run(env, output, apply):
-    before = read_sheet(env)
+    from tracker_failure_notes import plan_notes
+    from kol_tracker import verify_literal_target
+    before = read_sheet(env, all_columns=True)
     print('Tracker read; checking native cell metadata',flush=True)
     sid = before['metadata']['spreadsheetId']
     prop = next(s['properties'] for s in before['metadata']['sheets'] if s['properties']['title'] == 'Meta')
@@ -95,7 +97,12 @@ def run(env, output, apply):
     gs = AuthorizedSession(credentials)
     endpoint = 'https://sheets.googleapis.com/v4/spreadsheets/'+sid
     fields = 'spreadsheetId,sheets(properties,tables,merges,protectedRanges,data(startRow,startColumn,rowData(values(userEnteredValue,effectiveValue,formattedValue,userEnteredFormat,dataValidation,chipRuns,textFormatRuns))))'
-    grid = get_json(gs, endpoint, {'ranges': "'Meta'!A1:V%d" % (last+1), 'includeGridData': 'true', 'fields': fields})
+    column_label, count = '', prop['gridProperties']['columnCount']
+    while count:
+        count, remainder = divmod(count - 1, 26)
+        column_label = chr(65 + remainder) + column_label
+    native_range = "'Meta'!A1:%s%d" % (column_label,last+1)
+    grid = get_json(gs, endpoint, {'ranges': native_range, 'includeGridData': 'true', 'fields': fields})
     tab = next(s for s in grid['sheets'] if s['properties']['sheetId']==sheet_id)
     if tab.get('tables') or tab.get('merges') or tab.get('protectedRanges'):
         raise RuntimeError('Native tables/merges/protection require explicit inspection before writing')
@@ -162,22 +169,31 @@ def run(env, output, apply):
         totals=aggregate(observed)
         requests_body.append(write_range(sheet_id,number,9,[totals[k] for k in METRICS]))
         updated.append({'row':number,'creator':row[1],'ad_ids':matches[number],'metrics':totals})
+    partial = [{'row':item['row'],'reason':'Metric unavailable: '+', '.join(
+        key for key,value in item['metrics'].items() if value is None)}
+        for item in updated if any(value is None for value in item['metrics'].values())]
+    notes = plan_notes(raw,{item['row'] for item in updated},skips+partial,1,3)
+    for item in notes:
+        for col,value in item['changes'].items():
+            target = block[item['row']-1].get('values',[])
+            verify_literal_target(target[col] if col<len(target) else {},value)
+            requests_body.append(write_range(sheet_id,item['row'],col,[value]))
     now=datetime.now(ZoneInfo('America/Chicago'))
     header=re.sub(r'\[[^\]]*update[^\]]*\]', '['+now.strftime('%Y-%m-%d')+' update]',raw[0][9],flags=re.I)
     if header==raw[0][9] and 'update' not in header.lower(): header+='\n['+now.strftime('%Y-%m-%d')+' update]'
     requests_body.append(write_range(sheet_id,1,9,[header]))
-    plan={'fetched_at':now.isoformat(),'cutoff':end,'account':info,'new_row':new_number,'updated_rows':updated,'location_changes':location_changes,'skipped':skips,'shared_ads':conflicts,'j1':header,'requests':requests_body}
+    plan={'fetched_at':now.isoformat(),'cutoff':end,'account':info,'new_row':new_number,'updated_rows':updated,'location_changes':location_changes,'skipped':skips,'note_updates':notes,'shared_ads':conflicts,'j1':header,'requests':requests_body}
     stamp=now.strftime('%Y%m%dT%H%M%S')
     (output/(stamp+'-before.json')).write_text(json.dumps({'sheet':before,'grid':grid},ensure_ascii=False,indent=2))
     (output/(stamp+'-plan.json')).write_text(json.dumps(plan,ensure_ascii=False,indent=2))
     print(json.dumps({k:plan[k] for k in ['cutoff','new_row','skipped','shared_ads','j1']},ensure_ascii=False),flush=True)
     print('Planned metric rows:',len(updated),flush=True)
     if not apply: return
-    if read_sheet(env)['values'] != raw: raise RuntimeError('Sheet changed during fetch; no write performed')
+    if read_sheet(env,all_columns=True)['values'] != raw: raise RuntimeError('Sheet changed during fetch; no write performed')
     response=gs.post(endpoint+':batchUpdate',json={'requests':requests_body},timeout=90)
     if not response.ok: raise RuntimeError('Sheets batch rejected: '+response.text)
-    after=read_sheet(env)
-    after_grid=get_json(gs,endpoint,{'ranges':"'Meta'!A1:V%d" % (last+1),'includeGridData':'true','fields':fields})
+    after=read_sheet(env,all_columns=True)
+    after_grid=get_json(gs,endpoint,{'ranges':native_range,'includeGridData':'true','fields':fields})
     after_tab=next(s for s in after_grid['sheets'] if s['properties']['sheetId']==sheet_id)
     after_block=after_tab['data'][0].get('rowData',[])
     for number,row in rows:
@@ -188,6 +204,7 @@ def run(env, output, apply):
             current=after['values'][number-1]+['']*22
             if current[1:9]!=row[1:9] or current[0]!=location_changes.get(number,row[0]): raise RuntimeError('Manual fields verification failed')
             for col in [19,20,21]:
+                if any(item['row']==number and col in item['changes'] for item in notes): continue
                 old=block[number-1].get('values',[])
                 fresh=after_block[number-1].get('values',[])
                 original=old[col].get('userEnteredValue',{}) if len(old)>col else {}
@@ -212,6 +229,10 @@ def run(env, output, apply):
                 if actual!='': raise RuntimeError('Blank ratio verification failed')
             elif not isinstance(actual,(int,float)) or abs(actual-expected)>1e-8: raise RuntimeError('Metric verification failed')
     if after['values'][0][9]!=header: raise RuntimeError('Header verification failed')
+    for item in notes:
+        for col,value in item['changes'].items():
+            row=after['values'][item['row']-1]
+            if (row[col] if col<len(row) else '')!=value: raise RuntimeError('Failure reason verification failed')
     (output/(stamp+'-after.json')).write_text(json.dumps(after,ensure_ascii=False,indent=2))
     print('APPLIED AND VERIFIED',len(updated),'metric rows; new row',new_number,flush=True)
 

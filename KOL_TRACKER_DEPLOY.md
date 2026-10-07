@@ -128,6 +128,15 @@ the configured brand assets. Optional IDs: `KOL_ORGANIC_META_BUSINESS_ID`
 tokens can expire before the next daily run. `KOL_ORGANIC_META_ACCESS_TOKEN`
 is no longer used; keep the shared token valid for both Ads and Organic.
 
+Partnership Ads Meta/TikTok daily writers locate the existing
+`Reason for data update failure` header rather than assuming a fixed column.
+Row-level failures (no exact binding, duplicate ad claims, no Insights,
+invalid metrics) retain metrics and write English reasons. Partial TikTok
+ROAS/Reach preservation is also explained. Managed `Update failed: ` notes
+clear after complete recovery; manual notes are preserved. No column is
+created if the header is absent. Account-level API failures still abort
+before writes rather than assigning guessed per-row failure causes.
+
 Organic TikTok public counters are included in the same daily 08:00 Chicago
 job. Standalone preview: `.venv-kol/bin/python kol_tracker.py organic-tiktok`;
 write: `.venv-kol/bin/python kol_tracker.py organic-tiktok --apply`.

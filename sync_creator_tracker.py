@@ -113,7 +113,7 @@ def ad_name_matches(name, creator):
                for i in range(len(parts)) for j in range(i+1, len(parts)+1))
 
 
-def read_sheet(env):
+def read_sheet(env, all_columns=False):
     match = re.search(r'/spreadsheets/d/([^/]+)', env['KOL_TRACKER_GOOGLE_SHEETS_LINK'])
     if not match:
         raise RuntimeError('Invalid KOL_TRACKER_GOOGLE_SHEETS_LINK')
@@ -127,9 +127,15 @@ def read_sheet(env):
     if not prop:
         raise RuntimeError('Meta tab not found')
     values = []
+    label = 'V'
+    if all_columns:
+        label, count = '', prop['gridProperties']['columnCount']
+        while count:
+            count, remainder = divmod(count - 1, 26)
+            label = chr(65 + remainder) + label
     for start in range(1, prop['gridProperties']['rowCount'] + 1, 400):
         end = min(start + 399, prop['gridProperties']['rowCount'])
-        part = get_json(session, base + '/values/' + quote("'Meta'!A%d:V%d" % (start, end), safe=''), {'valueRenderOption': 'UNFORMATTED_VALUE'})
+        part = get_json(session, base + '/values/' + quote("'Meta'!A%d:%s%d" % (start, label, end), safe=''), {'valueRenderOption': 'UNFORMATTED_VALUE'})
         chunk = part.get('values', [])
         values.extend(chunk + [[]] * (end - start + 1 - len(chunk)))
     return {'metadata': metadata, 'values': values}

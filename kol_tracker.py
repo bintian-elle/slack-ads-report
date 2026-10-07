@@ -382,7 +382,12 @@ def tiktok_bindings(values, ads, details=None):
             skipped.append({'row': index, 'reason': 'Missing or ambiguous Ad ID binding'}); continue
         ms = [byid[aid]['metrics'] for aid in ids]
         required = ['spend', 'complete_payment', 'complete_payment_roas', 'reach', 'impressions', 'video_play_actions', 'video_watched_2s']
-        if any(k not in m or not math.isfinite(float(m[k])) or float(m[k]) < 0 for m in ms for k in required):
+        try:
+            invalid_metrics = any(k not in m or isinstance(m[k],bool) or
+                not math.isfinite(float(m[k])) or float(m[k]) < 0 for m in ms for k in required)
+        except (ValueError,TypeError):
+            invalid_metrics = True
+        if invalid_metrics:
             skipped.append({'row': index, 'reason': 'Invalid API metrics'}); continue
         spend = sum(float(m['spend']) for m in ms)
         impressions = sum(float(m['impressions']) for m in ms)
@@ -399,13 +404,17 @@ def tiktok_bindings(values, ads, details=None):
 
 
 def tiktok_daily(env, output, apply):
+    from tracker_failure_notes import plan_notes
     session, endpoint = sheet_session(env)
     prop, native, values = read_tab(session, endpoint, 'TikTok')
     details = fetch_ad_details(env)
     planned, skipped = tiktok_bindings(values, fetch_report(env), details)
-    save_json(output / 'TikTok-daily-plan.json', {'planned': planned, 'skipped': skipped, 'window': 'API lifetime through request time'})
+    partial = [{'row':item['row'],'reason':'ROAS and Reach retained: multiple ads cannot be safely aggregated'}
+               for item in planned if item['preserve']]
+    notes = plan_notes(values,{item['row'] for item in planned},skipped+partial,0,3)
+    save_json(output / 'TikTok-daily-plan.json', {'planned': planned, 'skipped': skipped, 'note_updates':notes, 'window': 'API lifetime through request time'})
     print('TikTok metrics planned: %d; skipped: %d' % (len(planned), len(skipped)), flush=True)
-    if not apply or not planned:
+    if not apply or not (planned or notes):
         return
     cells = native['sheets'][0]['data'][0]['rowData']
     body, expected = [], json.loads(json.dumps(native))
@@ -418,8 +427,14 @@ def tiktok_daily(env, output, apply):
             row = cells[p['row']-1].get('values', [])
             verify_literal_target(row[col] if col < len(row) else {}, value)
             body.append(write_range(prop['sheetId'], p['row'], col, [value]))
+    for item in notes:
+        for col,value in item['changes'].items():
+            row=cells[item['row']-1].get('values',[])
+            verify_literal_target(row[col] if col<len(row) else {},value)
+            body.append(write_range(prop['sheetId'],item['row'],col,[value]))
     header = 'Lifetime Spend\n[%s update]' % datetime.now(CHICAGO).strftime('%m/%d')
-    body.append(write_range(prop['sheetId'], 1, 7, [header]))
+    if planned:
+        body.append(write_range(prop['sheetId'], 1, 7, [header]))
     for request in body:
         update = request['updateCells']; region = update['range']
         row = expected_cells[region['startRowIndex']].setdefault('values', [])
