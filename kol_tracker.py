@@ -22,6 +22,7 @@ from sync_creator_tracker import BASE, code_key as meta_code, get_json, graph_pa
 from update_meta_tracker import exact_mapping, new_row_status, run as meta_daily, write_range
 from update_tiktok_tracker import creator_segment, fetch_report, fetch_ad_details, normalized
 from kol_organic_meta import run as organic_meta_daily
+from kol_organic_tiktok import run as organic_tiktok_daily
 
 CHICAGO = ZoneInfo('America/Chicago')
 
@@ -137,7 +138,7 @@ def sheet_session(env):
     return AuthorizedSession(credentials), 'https://sheets.googleapis.com/v4/spreadsheets/' + sid
 
 
-def read_tab(session, endpoint, title):
+def read_tab(session, endpoint, title, validate_tracker=True):
     metadata = get_json(session, endpoint, {'fields': 'sheets(properties)'})
     prop = next(s['properties'] for s in metadata['sheets'] if s['properties']['title'] == title)
     # Metadata-grounded, bounded native reads; preserve every existing column.
@@ -153,10 +154,10 @@ def read_tab(session, endpoint, title):
     if not values:
         raise RuntimeError('Missing Tracker headers')
     headers = values[0]
-    if title == 'Meta':
+    if validate_tracker and title == 'Meta':
         if len(headers) < 22 or [headers[i] for i in [1, 6, 7, 8]] != ['Creator', 'Post Link', 'Ad Code', 'Status']:
             raise RuntimeError('Meta schema changed')
-    elif title == 'TikTok':
+    elif validate_tracker and title == 'TikTok':
         if headers[:7] != ['Creator', 'Content Brief', 'Ad Code', 'Post Link', 'Launch Date', 'Status', 'Note'] or len(headers) < 14 or headers[13] != 'Ad IDs':
             raise RuntimeError('TikTok schema changed; expected N1 Ad IDs')
     return prop, data, values
@@ -446,7 +447,7 @@ def tiktok_daily(env, output, apply):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'check'])
+    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-tiktok', 'check'])
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
     load_dotenv(BASE / '.env')
@@ -457,7 +458,7 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if args.task not in ['daily', 'organic']:
+            if args.task not in ['daily', 'organic', 'organic-tiktok']:
                 print('Another tracker task is running; skipped', flush=True); return
             print('Another tracker task is running; daily update queued', flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -473,11 +474,14 @@ def main():
             poll(env, state_dir / 'slack-state.json', output, args.apply)
         elif args.task == 'organic':
             organic_meta_daily(env, output, args.apply)
+        elif args.task == 'organic-tiktok':
+            organic_tiktok_daily(env, output, args.apply)
         else:
             failures = []
             for name, action in [('Meta', lambda: meta_daily(env, output, args.apply)),
                                  ('TikTok', lambda: tiktok_daily(env, output, args.apply))] + (
-                                 [('Organic Meta', lambda: organic_meta_daily(env, output, args.apply))]
+                                 [('Organic Meta', lambda: organic_meta_daily(env, output, args.apply)),
+                                  ('Organic TikTok', lambda: organic_tiktok_daily(env, output, args.apply))]
                                  if env.get('KOL_ORGANIC_SHEETS_LINK') else []):
                 try:
                     action()

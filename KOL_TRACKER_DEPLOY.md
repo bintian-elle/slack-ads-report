@@ -116,7 +116,7 @@ TikTok 官方 Postman 集合列出只读 `GET /open_api/v1.3/tt_video/info/`，
 素材 Code 路径本次不接入定时任务，不额外申请权限、不导入素材。
 
 来源：https://www.postman.com/tiktok/tiktok-api-for-business/documentation/efqhadc/tiktok-business-api-v1-3
-# Organic Meta natural metrics
+# Organic Meta metrics (Method A interactions)
 
 When `KOL_ORGANIC_SHEETS_LINK` is configured, the existing daily KOL task also
 updates its `Meta-IG` tab at the existing America/Chicago 08:00 schedule.
@@ -128,9 +128,45 @@ the configured brand assets. Optional IDs: `KOL_ORGANIC_META_BUSINESS_ID`
 tokens can expire before the next daily run. `KOL_ORGANIC_META_ACCESS_TOKEN`
 is no longer used; keep the shared token valid for both Ads and Organic.
 
+Organic TikTok public counters are included in the same daily 08:00 Chicago
+job. Standalone preview: `.venv-kol/bin/python kol_tracker.py organic-tiktok`;
+write: `.venv-kol/bin/python kol_tracker.py organic-tiktok --apply`.
+This uses the public page parser in `get_tiktok_public_data.py`, not Ads API
+metrics. Video IDs are deduplicated; requests have a 3–7 second interval and
+at most one attempt per video per Chicago calendar day (including failed
+attempts). State is persisted before the request. Preview also consumes that
+day's attempt; a later apply reuses successfully cached results. Retain
+`organic-tiktok-state.json` in the configured state directory across deploys.
+HTTP 403/429 stops the whole batch without retry or sheet writes, persisting
+at least 24-hour backoff and honoring any longer Retry-After. Redirects are
+not followed. Missing/invalid counters retain existing sheet values.
+E:J receive public lifetime Views, four-part Interaction, Likes, Comments,
+Saves and Shares. K:L use manual D fee for CPM/CPE; existing formulas remain.
+E1 shows `Views` followed by `[MM/DD update]` on a new line, indicating the
+latest successful batch, not that every video succeeded. Status is untouched.
+
 `kol_organic_meta.py` queries Partnership Ads Content Discovery by exact post
-permalink in batches of five. H:M use only `organic_insights` (views, interaction,
-likes, comments, shares, saves), not CSV or paid/cross-surface totals. N:O use the
+permalink in batches of five. H and J:M remain natural `organic_insights` metrics.
+I uses Method A: API natural Interaction, or the sum of natural likes/comments/
+shares/saves when that total is unavailable, plus Instagram Ads Insights
+`onsite_conversion.post_net_like` + `onsite_conversion.post_net_comment` + `post`.
+Ads bind only by exact Creative `source_instagram_media_id` to the returned
+content ID, using a fresh complete account inventory. Each Ad ID is counted once
+per post; Facebook/other platforms, saves, gross engagement and video views are
+not added. Paid reads cover each ad's creation date through today in the ad
+account timezone. Each run still reads the complete inventory and live statuses.
+Paid metrics are cached in `KOL_TRACKER_STATE_DIR/organic-paid-cache.json`.
+On first observed pause, retain daily reads for at least 30 days, then refresh
+every seven days. Active/unknown states, reactivation, missing/invalid caches
+and changed query scope require fresh reads. Organic post metrics remain daily.
+Optional `KOL_ORGANIC_PAUSED_GRACE_DAYS` (minimum 30) and
+`KOL_ORGANIC_PAUSED_REFRESH_DAYS` (default 7) control this optimization; these
+are operational defaults, not a Meta guarantee that paused metrics are final.
+Private plans record each ad's actual cached fetch date. A failed
+inventory/Insights read aborts before any sheet write.
+No estimate labels are written; the private plan retains calculation provenance.
+Consequently I and O use a mixed natural/paid interaction basis, while H/N
+remain natural-view based. No CSV data is used. N:O use the
 existing manually maintained G fee: fee/views*1000 and fee/interaction.
 Existing N:O formulas are preserved; literal cells are recalculated when inputs
 are valid. Null/missing metrics and unmatched posts retain existing values,
@@ -142,7 +178,13 @@ also exactly matches a live API Creative. Conflicting post/code identities and
 Ad IDs shared by multiple Organic rows are rejected. This is not a direct
 Post Link-to-Ad Code API conversion. Organic F
 updates only existing `testing`, `pause`/`paused`, or blank cells, using exact unshared
-Creative Ad Code bindings. Any ACTIVE ad means `testing`; exclusively paused
+Creative Ad Code bindings, or exact Post Link -> returned content ID -> Creative
+`source_instagram_media_id` bindings. A conflicting code/media binding or Ad ID
+claimed by multiple rows blocks both automatic status and code writes. Blank E
+can also receive a unique `instagram_boost_post_access_token` returned by the
+exact source-media Creatives, only when that code does not map to other ads.
+No Media ID is written as an Ad Code; existing E is preserved. Any ACTIVE ad
+means `testing`; exclusively paused
 ads mean `pause` (or the existing dropdown's `paused` spelling). Dropdown options
 are never modified. T0 and other manual statuses, unknown statuses, and unmatched
 or shared ad bindings remain unchanged. No Organic new rows
@@ -153,6 +195,15 @@ Organic F1 is updated to `[MM/DD update]` in America/Chicago time in the same
 atomic batch as successful content updates. Failed fetches/writes do not advance
 F1; runs without writable data do not advance it. All other headers are preserved.
 Progress logs show content batches and the ad status query stage.
+
+Meta-IG Q2 is `Reason for data update failure`. English messages, without a prefix, explain missing/unsupported
+post links, posts absent from the API response, partial metrics, missing manual G
+fees, and zero/missing CPM/CPE denominators. Blank cells, legacy `自动：` notes,
+and recognized generated English reasons are managed; user notes are preserved.
+Legacy headers/notes migrate on the next run; reasons clear after recovery.
+New manually added content rows receive the same checks on the next daily run;
+this does not enable automatic Organic row insertion. Global API failures abort
+the run without replacing per-row explanations with guessed causes.
 For Organic-only preview: `.venv-kol/bin/python kol_tracker.py organic`.
 For Organic-only write: `.venv-kol/bin/python kol_tracker.py organic --apply`.
 Both share the existing tracker lock; no extra timer or robot restart is needed.

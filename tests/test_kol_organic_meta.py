@@ -2,7 +2,11 @@ import unittest
 import copy
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from kol_organic_meta import fetch_content, plan, post_key, status_plan, code_plan, run
+from kol_organic_meta import fetch_content, fetch_ad_interactions, paid_cache_decision, plan, post_key, status_plan, code_plan, note_plan, NOTE_HEADER, run
+from datetime import date
+from kol_organic_meta import media_identity_plan
+import tempfile
+import json
 
 
 HEADERS = ['Creator', 'Organic Launch Date', 'Content Brief', 'Post Link', 'Ad Code',
@@ -10,6 +14,175 @@ HEADERS = ['Creator', 'Organic Launch Date', 'Content Brief', 'Post Link', 'Ad C
 
 
 class OrganicTests(unittest.TestCase):
+    def test_media_identity_status_and_unique_code_without_tracker(self):
+        values = self.values()
+        values[2][4:6] = ['', '']
+        ad = {'id': '1', 'effective_status': 'ACTIVE', 'creative': {
+            'source_instagram_media_id': '123', 'branded_content': {
+                'instagram_boost_post_access_token': 'code'}}}
+        content = {'ABC': {'content_id': '123'}}
+        resolved, matches, codes, issues = media_identity_plan(values, [ad], content)
+        self.assertEqual(matches, {3: ['1']})
+        self.assertEqual(codes[0]['changes'], {4: 'code'})
+        self.assertEqual(status_plan(resolved, [ad], ad_matches=matches)[0]['changes'], {5: 'testing'})
+        self.assertFalse(issues)
+        values[2][5] = 'T0'
+        self.assertEqual(status_plan(values, [ad], ad_matches=matches), [])
+        ad['creative'].pop('branded_content')
+        _, matches, codes, _ = media_identity_plan(values, [ad], content)
+        self.assertEqual(matches, {3: ['1']})
+        self.assertEqual(codes, [])
+
+    def test_media_identity_conflicts_and_no_effective_media_fallback(self):
+        values = self.values()
+        values[2][4:6] = ['', '']
+        content = {'ABC': {'content_id': '123'}}
+        ad = {'id': '1', 'creative': {'source_instagram_media_id': '123'}}
+        values.append(list(values[2]))
+        _, matches, codes, issues = media_identity_plan(values, [ad], content)
+        self.assertFalse(matches)
+        self.assertFalse(codes)
+        self.assertEqual({item['row'] for item in issues}, {3, 4})
+        values.pop()
+        ad['creative'] = {'effective_instagram_media_id': '123'}
+        self.assertFalse(media_identity_plan(values, [ad], content)[1])
+        ad['creative'] = {'source_instagram_media_id': '123'}
+        other = {'id': '2', 'creative': {'source_instagram_media_id': '456',
+                 'branded_content': {'instagram_boost_post_access_token': 'other'}}}
+        values[2][4] = 'other'
+        self.assertFalse(media_identity_plan(values, [ad, other], content)[1])
+
+    def test_paid_cache_reuses_only_paused_and_refreshes_active(self):
+        from kol_organic_meta import AD_INTERACTION_FIELDS
+        ad = {'id': '1', 'created_time': '2026-01-01T12:00:00+0000',
+              'effective_status': 'PAUSED', 'creative': {'source_instagram_media_id': '123'}}
+        def pages(session, url, params):
+            if url.endswith('/ads'):
+                return [ad]
+            return [{'publisher_platform': 'instagram', 'actions': [
+                {'action_type': 'post', 'value': '8'}]}]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'cache.json'
+            path.write_text(json.dumps({'scope': {'account': 'act_1',
+                'base': 'https://graph.facebook.com/v23.0', 'timezone': 'America/Chicago',
+                'fields': list(AD_INTERACTION_FIELDS), 'schema': 1}, 'ads': {'1': {
+                    'value': 7, 'since': '2026-01-01', 'fetched_on': '2026-10-06',
+                    'paused_since': '2026-01-01'}}}))
+            with patch('kol_organic_meta.datetime') as clock, \
+                 patch('sync_creator_tracker.get_json', return_value={'timezone_name': 'America/Chicago'}), \
+                 patch('sync_creator_tracker.graph_pages', side_effect=pages) as api:
+                from datetime import datetime
+                clock.strptime.side_effect = datetime.strptime
+                clock.now.return_value = datetime(2026, 10, 7)
+                env = {'META_ACCESS_TOKEN': 'test', 'META_AD_ACCOUNT_ID': '1'}
+                content = {'ABC': {'content_id': '123'}}
+                _, paid = fetch_ad_interactions(env, content, path)
+                self.assertEqual(paid['123']['value'], 7)
+                self.assertEqual(api.call_count, 1)
+                ad['effective_status'] = 'ACTIVE'
+                _, paid = fetch_ad_interactions(env, content, path)
+                self.assertEqual(paid['123']['value'], 8)
+                self.assertIsNone(json.loads(path.read_text())['ads']['1']['paused_since'])
+
+    def test_paid_cache_grace_weekly_and_reactivation(self):
+        entry = {'paused_since': '2026-08-01', 'fetched_on': '2026-09-30', 'value': 12}
+        self.assertEqual(paid_cache_decision(entry, 'PAUSED', date(2026, 10, 6)),
+                         (False, '2026-08-01'))
+        self.assertTrue(paid_cache_decision(entry, 'PAUSED', date(2026, 10, 7))[0])
+        for status in ['ACTIVE', 'DISAPPROVED', None]:
+            self.assertEqual(paid_cache_decision(entry, status, date(2026, 10, 6)), (True, None))
+        entry['paused_since'] = '2026-10-01'
+        self.assertTrue(paid_cache_decision(entry, 'CAMPAIGN_PAUSED', date(2026, 10, 6))[0])
+        self.assertEqual(paid_cache_decision({}, 'PAUSED', date(2026, 10, 6)),
+                         (True, '2026-10-06'))
+        entry['value'] = float('nan')
+        self.assertTrue(paid_cache_decision(entry, 'PAUSED', date(2026, 10, 6))[0])
+
+    def test_method_a_fallback_and_cpe(self):
+        content = {'ABC': {'content_id': '123', 'organic_insights': {
+            'views': 100, 'interaction': None, 'likes': 20,
+            'comments': 3, 'shares': 2, 'saves': 1}}}
+        result, _ = plan(self.values(), content, {'123': {'value': 4}})
+        self.assertEqual(result[0]['changes'][8], 30)
+        self.assertEqual(result[0]['changes'][14], 40)
+        self.assertNotIn('interaction', result[0]['missing'])
+        self.assertNotIn('estimate', str(note_plan(self.values(), result)).lower())
+        content['ABC']['organic_insights']['interaction'] = 40
+        self.assertEqual(plan(self.values(), content, {'123': {'value': 4}})[0][0]['changes'][8], 44)
+
+    def test_method_a_missing_parts_or_paid_never_uses_stale_values(self):
+        content = {'ABC': {'content_id': '123', 'organic_insights': {
+            'interaction': None, 'likes': 20, 'comments': 3, 'shares': 2}}}
+        self.assertNotIn(8, plan(self.values(), content, {'123': {'value': 4}})[0][0]['changes'])
+        content['ABC']['organic_insights']['interaction'] = 40
+        result = plan(self.values(), content, {})[0][0]
+        self.assertNotIn(8, result['changes'])
+        self.assertNotIn(14, result['changes'])
+
+    def test_legacy_notes_migrate_and_recovered_notes_clear(self):
+        values = self.values()
+        values[1].extend(['', '数据更新说明（自动）'])
+        values[2].extend([''] * 10)
+        values[2][16] = '自动：API未返回Interaction；CPE缺少最新分母'
+        result = note_plan(values, [{'row': 3, 'missing': [], 'changes': {7: 100, 8: 30}}])
+        self.assertEqual(result, [{'row': 2, 'changes': {16: NOTE_HEADER}},
+                                  {'row': 3, 'changes': {16: ''}}])
+        values[1][16] = NOTE_HEADER
+        values[2][16] = 'API did not return the matching post; H:O unchanged'
+        self.assertEqual(note_plan(values, [{'row': 3, 'missing': [], 'changes': {7: 100, 8: 30}}]),
+                         [{'row': 3, 'changes': {16: ''}}])
+
+    def test_paid_exact_source_instagram_only_dedup_and_no_gross(self):
+        ads = [{'id': '1', 'created_time': '2026-09-01T12:00:00+0000',
+                'creative': {'source_instagram_media_id': '123'}},
+               {'id': '1', 'created_time': '2026-09-01T12:00:00+0000',
+                'creative': {'source_instagram_media_id': '123'}},
+               {'id': '2', 'creative': {'effective_instagram_media_id': '123'}}]
+        actions = [{'action_type': 'onsite_conversion.post_net_like', 'value': '2'},
+                   {'action_type': 'onsite_conversion.post_net_comment', 'value': '3'},
+                   {'action_type': 'post', 'value': '4'},
+                   {'action_type': 'post_interaction_gross', 'value': '99'},
+                   {'action_type': 'onsite_conversion.post_net_save', 'value': '10'}]
+        def pages(session, url, params):
+            if url.endswith('/ads'):
+                return ads
+            self.assertTrue(url.endswith('/1/insights'))
+            return [{'publisher_platform': 'instagram', 'actions': actions},
+                    {'publisher_platform': 'facebook', 'actions': actions}]
+        with patch('sync_creator_tracker.get_json', return_value={'timezone_name': 'America/Chicago'}), \
+             patch('sync_creator_tracker.graph_pages', side_effect=pages):
+            _, paid = fetch_ad_interactions({'META_ACCESS_TOKEN': 'test', 'META_AD_ACCOUNT_ID': '1'},
+                                           {'ABC': {'content_id': '123'}, 'DEF': {'content_id': '456'}})
+        self.assertEqual(paid['123']['value'], 9)
+        self.assertEqual(paid['123']['ad_ids'], ['1'])
+        self.assertEqual(paid['456']['value'], 0)
+
+    def test_notes_explain_gaps_and_clear_after_recovery(self):
+        values = self.values()
+        missing = note_plan(values, [])
+        self.assertIn('API did not return the matching post', missing[1]['changes'][16])
+        values[2].extend([''] * 10)
+        values[2][16] = missing[1]['changes'][16]
+        complete = {'row': 3, 'missing': [], 'changes': {7: 100, 8: 10}}
+        self.assertEqual(note_plan(values, [complete])[-1]['changes'], {16: ''})
+        values[2][6] = ''
+        self.assertIn('requires manual entry', note_plan(values, [complete])[-1]['changes'][16])
+        values[2][16] = '人工备注'
+        self.assertEqual(len(note_plan(values, [])), 1)
+
+    def test_notes_zero_partial_invalid_link_and_summary(self):
+        values = self.values()
+        result = note_plan(values, [{'row': 3, 'missing': ['interaction'], 'changes': {7: 0}}])
+        self.assertIn('Interaction', result[-1]['changes'][16])
+        self.assertIn('denominator is zero', result[-1]['changes'][16])
+        values[2][3] = ''
+        values.append(['Summary'])
+        self.assertEqual(len(note_plan(values, [])), 2)
+        self.assertIn('Missing or unsupported post link', note_plan(values, [])[-1]['changes'][16])
+        values[1].extend(['', '人工列'])
+        with self.assertRaises(RuntimeError):
+            note_plan(values, [])
+
     def test_exact_post_code_backfill_preserves_manual_status(self):
         ads = [{'id': '1', 'effective_status': 'ACTIVE', 'creative': {
             'branded_content': {'instagram_boost_post_access_token': 'CODE'}}}]
@@ -53,6 +226,10 @@ class OrganicTests(unittest.TestCase):
         native = {'sheets': [{'data': [{'rowData': [
             {'values': [{} for _ in range(15)]} for _ in range(3)]}]}]}
         after = copy.deepcopy(native)
+        after['sheets'][0]['data'][0]['rowData'][1]['values'].extend([{},
+            {'userEnteredValue': {'stringValue': NOTE_HEADER}}])
+        after['sheets'][0]['data'][0]['rowData'][2]['values'].extend([{},
+            {'userEnteredValue': {'stringValue': 'API did not return Interaction/Likes/Comments/Shares/Saves; CPE denominator unavailable'}}])
         after['sheets'][0]['data'][0]['rowData'][0]['values'][5] = {
             'userEnteredValue': {'stringValue': '[10/06 update]'}}
         for col, value in [(7, 100), (13, 12000)]:
@@ -62,7 +239,7 @@ class OrganicTests(unittest.TestCase):
         with patch('kol_tracker.sheet_session', return_value=(session, 'test-endpoint')), \
              patch('kol_tracker.read_tab', side_effect=[({'sheetId': 0}, native, values),
                  ({'sheetId': 0}, native, values), ({'sheetId': 0}, after, values)]), \
-             patch('kol_tracker.save_json'), patch('kol_tracker.meta_inventory', return_value=({}, [])), \
+             patch('kol_tracker.save_json'), patch('kol_organic_meta.fetch_ad_interactions', return_value=([], {})), \
              patch('kol_organic_meta.fetch_content', return_value={'ABC': {
                  'content_id': '1', 'organic_insights': {'views': 100}}}), \
              patch('kol_organic_meta.datetime') as clock:
@@ -70,7 +247,7 @@ class OrganicTests(unittest.TestCase):
             run({'KOL_ORGANIC_SHEETS_LINK': 'test'}, Path('/tmp'), True)
         self.assertEqual(session.post.call_count, 1)
         requests = session.post.call_args.kwargs['json']['requests']
-        self.assertEqual(len(requests), 3)
+        self.assertEqual(len(requests), 5)
         self.assertEqual(requests[-1]['updateCells']['range']['startRowIndex'], 0)
         self.assertEqual(requests[-1]['updateCells']['range']['startColumnIndex'], 5)
 
@@ -93,7 +270,7 @@ class OrganicTests(unittest.TestCase):
                 'Authorization', 'Bearer shared-test-token')
 
     def values(self):
-        return [[], HEADERS, ['leen', '', '', 'https://www.instagram.com/reels/ABC/?x=1', '', 'T0', 1200]]
+        return [[], HEADERS.copy(), ['leen', '', '', 'https://www.instagram.com/reels/ABC/?x=1', '', 'T0', 1200]]
 
     def test_natural_metrics_and_fee(self):
         content = {'ABC': {'content_id': '123', 'organic_insights': {'views': 3451, 'interaction': 87,
@@ -138,7 +315,7 @@ class OrganicTests(unittest.TestCase):
         values[2][4:6] = ['code', 'testing']
         ad = {'id': '1', 'effective_status': 'CAMPAIGN_PAUSED', 'creative': {
             'branded_content': {'instagram_boost_post_access_token': 'code'}}}
-        self.assertEqual(status_plan(values, [ad])[0]['changes'], {5: 'pause'})
+        self.assertEqual(status_plan(values, [ad])[0]['changes'], {5: 'paused'})
         ad['effective_status'] = 'DISAPPROVED'
         self.assertEqual(status_plan(values, [ad]), [])
         ad['effective_status'] = 'ACTIVE'
@@ -153,5 +330,7 @@ class OrganicTests(unittest.TestCase):
         cells = [{}, {}, {'values': [{}, {}, {}, {}, {}, {'dataValidation': {
             'condition': {'type': 'ONE_OF_LIST', 'values': [{'userEnteredValue': 'paused'}]}}}]}]
         self.assertEqual(status_plan(values, ads, cells)[0]['changes'], {5: 'paused'})
+        cells[2]['values'][5]['dataValidation']['condition']['values'] = [{'userEnteredValue': 'pause'}]
+        self.assertEqual(status_plan(values, ads, cells)[0]['changes'], {5: 'pause'})
         cells[2]['values'][5]['dataValidation']['condition']['values'] = [{'userEnteredValue': 'T0'}]
         self.assertEqual(status_plan(values, ads, cells), [])
