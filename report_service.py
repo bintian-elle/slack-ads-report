@@ -433,12 +433,12 @@ def format_slack_report(
         google_spend = sum((row.spend for row in google_rows), Decimal("0"))
         google_revenue = sum((row.revenue for row in google_rows), Decimal("0"))
         google_line = (
-            f"• *google ads spend:* {currency(google_spend)} | "
-            f"*google ads ROAS:* "
+            f"• *Google Ads Spend:* {currency(google_spend)} | "
+            f"*Google Ads ROAS:* "
             f"{calculate_roas(google_revenue, google_spend):.2f}"
         )
     else:
-        google_line = "• *google ads spend:* - | *google ads ROAS:* -"
+        google_line = "• *Google Ads Spend:* - | *Google Ads ROAS:* -"
 
     lines = [
         f"📊 *Bluevua Daily Report {report_date:%m/%d}*",

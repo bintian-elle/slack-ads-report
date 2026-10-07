@@ -122,6 +122,10 @@ class ReportServiceTests(unittest.TestCase):
             "*Total Impressions:* 12,500 | *CTR:* 2.00%",
             report,
         )
+        self.assertIn(
+            "• *Google Ads Spend:* $40.00 | *Google Ads ROAS:* 2.00",
+            report,
+        )
 
     def test_chatgpt_is_included_in_total_and_slack_line(self):
         report = format_slack_report(
