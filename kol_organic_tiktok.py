@@ -8,15 +8,51 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from get_tiktok_public_data import extract_video_id, get_tiktok_metrics, TikTokBlocked
+from get_tiktok_public_data import extract_video_id, get_tiktok_metrics, normalize_counter, TikTokBlocked
 
 FIELDS = ('views', 'likes', 'comments', 'saves', 'shares')
+NOTE_HEADER = 'Reason for data update failure'
+NOTE_PREFIXES = ('Missing or unsupported TikTok link', 'Invalid or missing video counters',
+    'Video data unavailable', 'HTTP request failed', 'Request timed out',
+    'Request already attempted today', 'TikTok HTTP ', 'Skipped due to TikTok backoff')
+
+
+def failure_reason(error):
+    if isinstance(error, ValueError):
+        return 'Invalid or missing video counters; existing metrics retained'
+    import requests
+    if isinstance(error, requests.Timeout):
+        return 'Request timed out; existing metrics retained'
+    if isinstance(error, requests.RequestException):
+        return 'HTTP request failed; existing metrics retained'
+    return 'Video data unavailable; existing metrics retained'
+
+
+def note_plan(values, successes, reasons):
+    """Append after all populated columns; preserve non-managed manual notes."""
+    header = values[0]
+    if NOTE_HEADER in header:
+        col = header.index(NOTE_HEADER)
+    else:
+        col = max((i for row in values for i, value in enumerate(row)
+                   if value != ''), default=11) + 1
+    updates = [{'row': 1, 'changes': {col: NOTE_HEADER}}] if col >= len(header) or header[col] != NOTE_HEADER else []
+    for number, row in enumerate(values[1:],2):
+        if not row or not row[0] or str(row[0]).strip().lower() == 'summary':
+            continue
+        old = str(row[col]) if len(row)>col else ''
+        if old and not old.startswith(NOTE_PREFIXES):
+            continue
+        value = '' if number in successes else reasons.get(number, '')
+        if number not in successes and number not in reasons:
+            continue
+        if value != old:
+            updates.append({'row':number,'changes':{col:value}})
+    return col, updates
 
 
 def metric_changes(metrics, fee):
-    if not all(isinstance(metrics.get(k), int) and not isinstance(metrics[k], bool)
-               and metrics[k] >= 0 for k in FIELDS):
-        raise ValueError('Missing or invalid public video counters')
+    metrics = {k: normalize_counter(metrics.get(k)) for k in FIELDS}
     interactions = sum(metrics[k] for k in FIELDS[1:])
     result = {4: metrics['views'], 5: interactions,
               6: metrics['likes'], 7: metrics['comments'],
@@ -60,11 +96,10 @@ def run(env, output, apply):
     if not isinstance(state.get('videos'), dict):
         raise RuntimeError('Invalid TikTok request state')
     now = datetime.now(timezone.utc)
-    if state.get('blocked_until') and now < datetime.fromisoformat(state['blocked_until']):
-        print('Organic TikTok backoff active; no public requests or writes', flush=True)
-        return
+    backoff_active = bool(state.get('blocked_until') and now < datetime.fromisoformat(state['blocked_until']))
     today = now.astimezone(ZoneInfo('America/Chicago')).date().isoformat()
-    results, skipped, attempted, blocked = {}, [], 0, False
+    results, skipped, attempted, blocked = {}, [], 0, backoff_active
+    blocked_reason = 'Skipped due to TikTok backoff; existing metrics retained'
     for number, row in enumerate(values[1:], 2):
         if not row or not row[0] or str(row[0]).strip().lower() == 'summary':
             continue
@@ -75,6 +110,8 @@ def run(env, output, apply):
             continue
         if vid in results:
             continue
+        if blocked:
+            break
         entry = state['videos'].get(vid, {})
         if entry.get('day') == today:
             if entry.get('metrics'):
@@ -96,28 +133,44 @@ def run(env, output, apply):
         except TikTokBlocked as error:
             state['blocked_until'] = backoff_until(datetime.now(timezone.utc), error.retry_after)
             blocked = True
+            blocked_reason = 'TikTok HTTP %s; batch stopped, backoff active' % error.status
+            state['videos'][vid]['reason'] = blocked_reason
             print('Organic TikTok HTTP %s; stopped with persistent backoff' % error.status, flush=True)
         except Exception as error:
-            skipped.append({'row': number, 'reason': type(error).__name__})
+            reason = failure_reason(error)
+            state['videos'][vid]['reason'] = reason
+            skipped.append({'row': number, 'reason': reason})
+            print('Organic TikTok row %d skipped: %s' % (number,reason),flush=True)
         save_json(path, state)
         if blocked:
             break
-    planned = []
+    planned, reasons = [], {}
     for number, row in enumerate(values[1:], 2):
-        if not row or not row[0]:
+        if not row or not row[0] or str(row[0]).strip().lower() == 'summary':
             continue
         try:
             vid = extract_video_id(row[2] if len(row) > 2 else '')
         except ValueError:
+            reasons[number] = 'Missing or unsupported TikTok link; existing metrics retained'
             continue
         if vid in results:
-            planned.append({'row': number, 'changes': metric_changes(results[vid], row[3] if len(row)>3 else None)})
+            try:
+                planned.append({'row': number, 'changes': metric_changes(results[vid], row[3] if len(row)>3 else None)})
+            except ValueError as error:
+                reasons[number] = failure_reason(error)
+        else:
+            reasons[number] = (blocked_reason if blocked else
+                state['videos'].get(vid,{}).get('reason',
+                    'Request already attempted today without usable data; existing metrics retained'))
+    note_col, notes = note_plan(values,{item['row'] for item in planned},reasons)
+    if note_col >= prop['gridProperties']['columnCount']:
+        raise RuntimeError('No unused column for failure reasons; no sheet write')
     save_json(output / 'Organic-TikTok-plan.json', {'planned': planned, 'skipped': skipped,
-        'requests': attempted, 'blocked': blocked, 'basis': 'Public TikTok lifetime counters'})
+        'requests': attempted, 'blocked': blocked, 'note_updates':notes, 'basis': 'Public TikTok lifetime counters'})
     print('Organic TikTok: %d requests; %d planned rows' % (attempted, len(planned)), flush=True)
-    if blocked:
-        raise RuntimeError('TikTok access restricted; no sheet write, backoff saved')
-    if not apply or not planned:
+    if not apply:
+        if blocked and not backoff_active:
+            raise RuntimeError('TikTok access restricted; backoff saved')
         return
     cells = native['sheets'][0]['data'][0]['rowData']
     expected_native = json.loads(json.dumps(native))
@@ -133,11 +186,18 @@ def run(env, output, apply):
         body.append(request)
         dest = expected_rows[number-1].setdefault('values', [])
         dest.extend({} for _ in range(max(0,col+1-len(dest))))
-        dest[col]['userEnteredValue'] = request['updateCells']['rows'][0]['values'][0]['userEnteredValue']
-    for item in planned:
+        entered = request['updateCells']['rows'][0]['values'][0].get('userEnteredValue')
+        if entered:
+            dest[col]['userEnteredValue'] = entered
+        else:
+            dest[col].pop('userEnteredValue',None)
+    for item in planned + notes:
         for col, value in item['changes'].items():
             add(item['row'], col, value)
-    add(1,4,'Views\n[%s update]' % datetime.now(ZoneInfo('America/Chicago')).strftime('%m/%d'))
+    if planned:
+        add(1,4,'Views\n[%s update]' % datetime.now(ZoneInfo('America/Chicago')).strftime('%m/%d'))
+    if not body:
+        return
     save_json(output / 'Organic-TikTok-before.json', native)
     if read_tab(session,endpoint,'TikTok',validate_tracker=False)[1] != native:
         raise RuntimeError('Organic TikTok sheet changed; no write')
@@ -153,3 +213,5 @@ def run(env, output, apply):
     if expected_native != after:
         raise RuntimeError('Organic TikTok native readback failed')
     print('Organic TikTok metrics and Views update date verified',flush=True)
+    if blocked and not backoff_active:
+        raise RuntimeError('TikTok access restricted; successful rows/reasons written, backoff saved')

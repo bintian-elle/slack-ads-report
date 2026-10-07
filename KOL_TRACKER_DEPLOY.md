@@ -137,9 +137,16 @@ at most one attempt per video per Chicago calendar day (including failed
 attempts). State is persisted before the request. Preview also consumes that
 day's attempt; a later apply reuses successfully cached results. Retain
 `organic-tiktok-state.json` in the configured state directory across deploys.
-HTTP 403/429 stops the whole batch without retry or sheet writes, persisting
+HTTP 403/429 stops all remaining public requests without retry, persisting
 at least 24-hour backoff and honoring any longer Retry-After. Redirects are
-not followed. Missing/invalid counters retain existing sheet values.
+not followed. Successful rows collected before a block and English failure
+reasons can still be written; the task reports the restriction as a failure.
+Missing/invalid counters retain existing sheet values and do not stop later
+videos. The final populated column is followed by `Reason for data update
+failure`; an existing column with that header is reused. Reasons are English,
+without an automatic prefix; recovered rows clear managed reasons, while
+manual notes are preserved. Backoff runs issue no public requests and can
+record that reason. Views date advances only when metrics are written.
 E:J receive public lifetime Views, four-part Interaction, Likes, Comments,
 Saves and Shares. K:L use manual D fee for CPM/CPE; existing formulas remain.
 E1 shows `Views` followed by `[MM/DD update]` on a new line, indicating the

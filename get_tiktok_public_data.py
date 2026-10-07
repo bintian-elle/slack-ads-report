@@ -17,6 +17,15 @@ def extract_video_id(url):
     return match.group(1)
 
 
+def normalize_counter(value):
+    """Accept exact nonnegative counts, including TikTok's digit strings."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    if isinstance(value, str) and re.fullmatch(r'[0-9]+', value.strip()):
+        return int(value.strip())
+    raise ValueError('Missing or invalid public video counter')
+
+
 def find_video_object(obj, video_id):
     """
     递归搜索 JSON，找到 id == video_id 且包含 stats 的视频对象
@@ -131,6 +140,9 @@ def get_tiktok_metrics(url):
                 "saves": stats.get("collectCount"),
                 "shares": stats.get("shareCount"),
             }
+
+            for field in ('views', 'likes', 'comments', 'saves', 'shares'):
+                result[field] = normalize_counter(result[field])
 
             return result
 

@@ -1,14 +1,55 @@
 import unittest
 from unittest.mock import patch, Mock
 from datetime import datetime, timezone
-from get_tiktok_public_data import extract_video_id, get_tiktok_metrics, TikTokBlocked
+from get_tiktok_public_data import extract_video_id, get_tiktok_metrics, normalize_counter, TikTokBlocked
 from kol_organic_tiktok import metric_changes, backoff_until
 from kol_organic_tiktok import run
+from kol_organic_tiktok import note_plan
 import tempfile
 from pathlib import Path
 
 
 class PublicTikTokTests(unittest.TestCase):
+    def test_invalid_video_skips_and_continues(self):
+        import json
+        headers = ['Creator','Organic Launch Date','Post Link','KOL Fee','Views',
+                   'Interaction','Likes','Comments','Saves','Shares','CPM','CPE']
+        values = [headers,['a','','https://www.tiktok.com/@a/video/123',100],
+                  ['b','','https://www.tiktok.com/@b/video/456',100]]
+        valid = dict(video_id='456',views=100,likes=10,comments=2,saves=3,shares=4)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('kol_tracker.sheet_session',return_value=(Mock(),'endpoint')), \
+             patch('kol_tracker.read_tab',return_value=({'gridProperties':{'columnCount':27}}, {},values)), \
+             patch('kol_organic_tiktok.get_tiktok_metrics',side_effect=[ValueError('invalid'),valid]) as get, \
+             patch('kol_organic_tiktok.time.sleep'):
+            run({'KOL_ORGANIC_SHEETS_LINK':'test','KOL_TRACKER_STATE_DIR':directory},Path(directory)/'run',False)
+            self.assertEqual(get.call_count,2)
+            plan = json.loads((Path(directory)/'run/Organic-TikTok-plan.json').read_text())
+            self.assertEqual([item['row'] for item in plan['planned']],[3])
+            self.assertIn('Invalid or missing',str(plan['note_updates']))
+
+    def test_failure_notes_append_clear_and_preserve_manual(self):
+        values = [['Creator','Views'],['a',1],['b',2]]
+        col, notes = note_plan(values,{2},{3:'Invalid or missing video counters; existing metrics retained'})
+        self.assertEqual(col,2)
+        self.assertEqual(notes[-1]['row'],3)
+        values[0].append('Reason for data update failure')
+        values[1].append('Invalid or missing video counters; existing metrics retained')
+        values[2].append('Manual note')
+        _, notes = note_plan(values,{2,3},{})
+        self.assertEqual(notes,[{'row':2,'changes':{2:''}}])
+
+    def test_counter_digit_strings_and_invalid_values(self):
+        for value in (41, '41', ' 41 ', '0041'):
+            self.assertEqual(normalize_counter(value), 41)
+        self.assertEqual(normalize_counter('0'), 0)
+        for value in (None, True, False, -1, '-1', '', '1.5', 1.5,
+                      '1K', '1,000', 'NaN', '１２', '1e3'):
+            with self.assertRaises(ValueError):
+                normalize_counter(value)
+        metrics = dict(views='100',likes='10',comments='2',saves='3',shares='4')
+        self.assertEqual(metric_changes(metrics,200)[5],19)
+
     def test_daily_dedupe_interval_and_restart(self):
         headers = ['Creator','Organic Launch Date','Post Link','KOL Fee','Views\n[10/07 update]',
                    'Interaction','Likes','Comments','Saves','Shares','CPM','CPE', '', '', '']
@@ -19,7 +60,7 @@ class PublicTikTokTests(unittest.TestCase):
             return dict(video_id=extract_video_id(url),views=100,likes=10,comments=2,saves=3,shares=4)
         with tempfile.TemporaryDirectory() as directory, \
              patch('kol_tracker.sheet_session',return_value=(Mock(),'endpoint')), \
-             patch('kol_tracker.read_tab',return_value=({}, {},values)), \
+             patch('kol_tracker.read_tab',return_value=({'gridProperties':{'columnCount':27}}, {},values)), \
              patch('kol_organic_tiktok.get_tiktok_metrics',side_effect=metrics) as get, \
              patch('kol_organic_tiktok.time.sleep') as sleep, \
              patch('kol_organic_tiktok.random.uniform',return_value=5):
@@ -38,7 +79,7 @@ class PublicTikTokTests(unittest.TestCase):
                   ['b','','https://www.tiktok.com/@b/video/456',100]]
         with tempfile.TemporaryDirectory() as directory, \
              patch('kol_tracker.sheet_session',return_value=(Mock(),'endpoint')), \
-             patch('kol_tracker.read_tab',return_value=({}, {},values)), \
+             patch('kol_tracker.read_tab',return_value=({'gridProperties':{'columnCount':27}}, {},values)), \
              patch('kol_organic_tiktok.get_tiktok_metrics',side_effect=TikTokBlocked(429)) as get:
             env = {'KOL_ORGANIC_SHEETS_LINK':'test','KOL_TRACKER_STATE_DIR':directory}
             output = Path(directory)/'run'
@@ -66,10 +107,11 @@ class PublicTikTokTests(unittest.TestCase):
     def test_exact_json_and_formula(self):
         response = Mock(status_code=200,headers={},text='<script type="application/json">'
             '{"id":"123","stats":{"playCount":100,"diggCount":10,"commentCount":2,'
-            '"collectCount":3,"shareCount":4}}</script>')
+            '"collectCount":"3","shareCount":4}}</script>')
         with patch('get_tiktok_public_data.requests.get',return_value=response):
             metrics = get_tiktok_metrics('https://www.tiktok.com/@a/video/123')
         changes = metric_changes(metrics,200)
+        self.assertIsInstance(metrics['saves'],int)
         self.assertEqual(changes[5],19)
         self.assertEqual(changes[10],2000)
         self.assertAlmostEqual(changes[11],200/19)
