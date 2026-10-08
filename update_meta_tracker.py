@@ -17,6 +17,17 @@ from google.oauth2.service_account import Credentials
 from sync_creator_tracker import BASE, METRICS, ad_location, aggregate, code_key, fetch_insights, get_json, graph_pages, post_key, read_sheet
 
 
+def unavailable_metrics(metrics):
+    """Zero-denominator AOV/CPC are not applicable, not update failures."""
+    expected_blank = set()
+    if metrics.get('purchase') == 0:
+        expected_blank.add('aov')
+    if metrics.get('clicks') == 0:
+        expected_blank.add('cpc')
+    return [key for key, value in metrics.items()
+            if value is None and key not in expected_blank]
+
+
 def exact_mapping(rows, ads):
     codes, claims = defaultdict(list), defaultdict(list)
     for ad in ads:
@@ -169,9 +180,8 @@ def run(env, output, apply):
         totals=aggregate(observed)
         requests_body.append(write_range(sheet_id,number,9,[totals[k] for k in METRICS]))
         updated.append({'row':number,'creator':row[1],'ad_ids':matches[number],'metrics':totals})
-    partial = [{'row':item['row'],'reason':'Metric unavailable: '+', '.join(
-        key for key,value in item['metrics'].items() if value is None)}
-        for item in updated if any(value is None for value in item['metrics'].values())]
+    partial = [{'row':item['row'],'reason':'Metric unavailable: '+', '.join(unavailable_metrics(item['metrics']))}
+        for item in updated if unavailable_metrics(item['metrics'])]
     notes = plan_notes(raw,{item['row'] for item in updated},skips+partial,1,3)
     for item in notes:
         for col,value in item['changes'].items():
