@@ -137,6 +137,38 @@ clear after complete recovery; manual notes are preserved. No column is
 created if the header is absent. Account-level API failures still abort
 before writes rather than assigning guessed per-row failure causes.
 
+### Organic YouTube (YTB)
+
+Set `YOUTUBE_API_KEY` alongside `KOL_ORGANIC_SHEETS_LINK` in the existing `.env`.
+The five-minute poll includes YouTube `KOL Content is Live` announcements and
+explicit ordinary launch notices (for example, "contents have been published").
+Thread replies are included, including later updates inside old contract threads.
+Creator must be unambiguous in Slack; videos are deduplicated by exact video ID.
+Only videos with an API publication date in 2026 are inserted, before Summary;
+existing rows are not reordered. New rows copy native formats/validation, use
+the API publication date (Eastern), and leave fees blank for manual maintenance.
+Summary sums expand to cover inserted rows. No creator discovery from search.
+
+Daily 02:00 Eastern updates public lifetime Views, Likes, Comments and the
+derived Interaction (Likes + Comments), CPM and CPE. Public Views are total
+YouTube views, not a guaranteed organic-only count. Shares/Saves are neither
+queried nor written nor treated as errors. Existing formulas/manual notes are
+preserved. Old automatic Shares/Saves failure explanations are cleared.
+The actual failure-reason column is resolved by its English header.
+
+Standalone preview/write commands (same task lock as the other KOL jobs):
+
+```bash
+.venv-kol/bin/python kol_tracker.py youtube-poll
+.venv-kol/bin/python kol_tracker.py youtube-poll --apply
+.venv-kol/bin/python kol_tracker.py organic-youtube --apply
+```
+
+Preserve `organic-youtube-slack-state.json` during deployment. It checkpoints
+thread metadata and discovered candidates; unchanged threads are not re-read.
+Private before/after snapshots and plans are saved under the runtime runs directory.
+The existing Robot service is not modified or restarted.
+
 Organic TikTok public counters are included in the same daily 02:00 Eastern
 job. Standalone preview: `.venv-kol/bin/python kol_tracker.py organic-tiktok`;
 write: `.venv-kol/bin/python kol_tracker.py organic-tiktok --apply`.

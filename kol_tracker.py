@@ -462,7 +462,7 @@ def tiktok_daily(env, output, apply):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-tiktok', 'check'])
+    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'check'])
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
     load_dotenv(BASE / '.env')
@@ -473,7 +473,7 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if args.task not in ['daily', 'organic', 'organic-tiktok']:
+            if args.task not in ['daily', 'organic', 'organic-tiktok', 'organic-youtube', 'youtube-poll']:
                 print('Another tracker task is running; skipped', flush=True); return
             print('Another tracker task is running; daily update queued', flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -487,17 +487,29 @@ def main():
             print('Tracker configuration check passed; no writes'); return
         if args.task == 'poll':
             poll(env, state_dir / 'slack-state.json', output, args.apply)
+            if env.get('KOL_ORGANIC_SHEETS_LINK') and env.get('YOUTUBE_API_KEY'):
+                from kol_organic_youtube import poll as youtube_poll
+                youtube_poll(env, output, args.apply)
+        elif args.task == 'youtube-poll':
+            from kol_organic_youtube import poll as youtube_poll
+            youtube_poll(env, output, args.apply)
+        elif args.task == 'organic-youtube':
+            from kol_organic_youtube import run as youtube_daily
+            youtube_daily(env, output, args.apply)
         elif args.task == 'organic':
             organic_meta_daily(env, output, args.apply)
         elif args.task == 'organic-tiktok':
             organic_tiktok_daily(env, output, args.apply)
         else:
+            from kol_organic_youtube import run as youtube_daily
             failures = []
             for name, action in [('Meta', lambda: meta_daily(env, output, args.apply)),
                                  ('TikTok', lambda: tiktok_daily(env, output, args.apply))] + (
                                  [('Organic Meta', lambda: organic_meta_daily(env, output, args.apply)),
                                   ('Organic TikTok', lambda: organic_tiktok_daily(env, output, args.apply))]
-                                 if env.get('KOL_ORGANIC_SHEETS_LINK') else []):
+                                 if env.get('KOL_ORGANIC_SHEETS_LINK') else []) + (
+                                 [('Organic YouTube', lambda: youtube_daily(env, output, args.apply))]
+                                 if env.get('KOL_ORGANIC_SHEETS_LINK') and env.get('YOUTUBE_API_KEY') else []):
                 try:
                     action()
                 except Exception as error:
