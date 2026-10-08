@@ -12,7 +12,7 @@ import requests
 
 
 def post_key(value):
-    match = re.search(r'instagram\.com/(?:p|reel|reels)/([^/?#]+)', str(value))
+    match = re.search(r'instagram\.com/(?:[^/?#]+/)?(?:p|reel|reels)/([^/?#]+)', str(value))
     return match.group(1) if match else None
 
 
@@ -417,6 +417,8 @@ def media_identity_plan(values, ads, content, blocked_rows=()):
 
 
 def run(env, output, apply):
+    from kol_organic_discovery import run as discover
+    discover(env,output,apply)
     from kol_tracker import sheet_session, read_tab, save_json, verify_literal_target
     from update_meta_tracker import write_range
     scoped = dict(env, KOL_TRACKER_GOOGLE_SHEETS_LINK=env['KOL_ORGANIC_SHEETS_LINK'])

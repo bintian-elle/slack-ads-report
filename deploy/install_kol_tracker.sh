@@ -9,7 +9,7 @@ esac
 test -x "$tracker_root/.venv-kol/bin/python"
 test -f "$tracker_root/.env"
 "$tracker_root/.venv-kol/bin/python" "$tracker_root/kol_tracker.py" check
-systemd-analyze calendar '*-*-* 08:00:00 America/Chicago'
+systemd-analyze calendar '*-*-* 02:00:00 America/New_York'
 for tracker_task in poll daily; do
   sudo tee "/etc/systemd/system/kol-tracker-${tracker_task}.service" >/dev/null <<EOF
 [Unit]
@@ -45,10 +45,10 @@ WantedBy=timers.target
 EOF
 sudo tee /etc/systemd/system/kol-tracker-daily.timer >/dev/null <<'EOF'
 [Unit]
-Description=Update KOL ads daily at Chicago 08:00
+Description=Update all KOL sheets daily at Eastern 02:00
 
 [Timer]
-OnCalendar=*-*-* 08:00:00 America/Chicago
+OnCalendar=*-*-* 02:00:00 America/New_York
 Persistent=true
 AccuracySec=1s
 Unit=kol-tracker-daily.service

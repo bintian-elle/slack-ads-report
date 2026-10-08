@@ -236,7 +236,8 @@ class OrganicTests(unittest.TestCase):
             after['sheets'][0]['data'][0]['rowData'][2]['values'][col] = {
                 'userEnteredValue': {'numberValue': value}}
         session = MagicMock()
-        with patch('kol_tracker.sheet_session', return_value=(session, 'test-endpoint')), \
+        with patch('kol_organic_discovery.run'), \
+             patch('kol_tracker.sheet_session', return_value=(session, 'test-endpoint')), \
              patch('kol_tracker.read_tab', side_effect=[({'sheetId': 0}, native, values),
                  ({'sheetId': 0}, native, values), ({'sheetId': 0}, after, values)]), \
              patch('kol_tracker.save_json'), patch('kol_organic_meta.fetch_ad_interactions', return_value=([], {})), \
@@ -253,7 +254,8 @@ class OrganicTests(unittest.TestCase):
 
     def test_failed_fetch_never_writes_f1_or_metrics(self):
         session = MagicMock()
-        with patch('kol_tracker.sheet_session', return_value=(session, 'test')), \
+        with patch('kol_organic_discovery.run'), \
+             patch('kol_tracker.sheet_session', return_value=(session, 'test')), \
              patch('kol_tracker.read_tab', return_value=({}, {}, self.values())), \
              patch('kol_organic_meta.fetch_content', side_effect=RuntimeError('API failed')):
             with self.assertRaises(RuntimeError):

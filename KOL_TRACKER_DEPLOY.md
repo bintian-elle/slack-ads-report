@@ -44,7 +44,7 @@ bash deploy/install_kol_tracker.sh
 ```
 
 安装器只新增/更新 `kol-tracker-*` 四个 systemd unit。Slack 每 5 分钟；广告
-每天 `America/Chicago` 08:00，自动适应夏令时。`Persistent=true` 允许宕机后补跑。
+每天美国东部时间 `America/New_York` 02:00，自动适应夏令时。`Persistent=true` 允许宕机后补跑；春季跳时当天 02:00 不存在时应检查 timer 的下一次触发。
 共用文件锁防止 Slack 和每日任务同时修改表格。轮询遇到占用则跳过，每日任务等待锁释放。
 
 ## 后续更新
@@ -119,7 +119,7 @@ TikTok 官方 Postman 集合列出只读 `GET /open_api/v1.3/tt_video/info/`，
 # Organic Meta metrics (Method A interactions)
 
 When `KOL_ORGANIC_SHEETS_LINK` is configured, the existing daily KOL task also
-updates its `Meta-IG` tab at the existing America/Chicago 08:00 schedule.
+updates its `Meta-IG` tab at America/New_York 02:00.
 Uses the shared `META_ACCESS_TOKEN` with `business_management`,
 `instagram_basic`, and `instagram_branded_content_ads_brand`, plus access to
 the configured brand assets. Optional IDs: `KOL_ORGANIC_META_BUSINESS_ID`
@@ -137,7 +137,7 @@ clear after complete recovery; manual notes are preserved. No column is
 created if the header is absent. Account-level API failures still abort
 before writes rather than assigning guessed per-row failure causes.
 
-Organic TikTok public counters are included in the same daily 08:00 Chicago
+Organic TikTok public counters are included in the same daily 02:00 Eastern
 job. Standalone preview: `.venv-kol/bin/python kol_tracker.py organic-tiktok`;
 write: `.venv-kol/bin/python kol_tracker.py organic-tiktok --apply`.
 This uses the public page parser in `get_tiktok_public_data.py`, not Ads API
@@ -165,6 +165,21 @@ E1 shows `Views` followed by `[MM/DD update]` on a new line, indicating the
 latest successful batch, not that every video succeeded. Status is untouched.
 
 `kol_organic_meta.py` queries Partnership Ads Content Discovery by exact post
+permalink after a complete cursor-based discovery pass. Missing Reels from
+`KOL_ORGANIC_META_YEAR` (default 2026) are inserted only when that exact post's
+`collaborators` response includes the Bluevua IG ID with `invite_status=Accepted`.
+Author names or previous collaborations do not establish eligibility. Empty,
+pending, incomplete or failed responses are excluded and recorded privately in
+`Organic-Meta-discovery.json`.
+Posts are deduplicated by shortcode and content ID. New rows copy only safe
+formatting and validation, not fees, manual status, codes or notes. Existing
+rows retain their order and values; new rows are inserted into B-column native
+date order (after existing same-date rows). Invalid or unsorted existing dates
+block insertion. Dropdowns are copied natively; fees remain blank for manual entry. Insertion is verified
+before the separate metrics stage; if metrics later fail, inserted identities
+remain and the next run does not duplicate them.
+
+The metric pass queries exact post
 permalink in batches of five. H and J:M remain natural `organic_insights` metrics.
 I uses Method A: API natural Interaction, or the sum of natural likes/comments/
 shares/saves when that total is unavailable, plus Instagram Ads Insights
