@@ -204,6 +204,9 @@ def poll(env, output, apply):
             row=index+offset+1
             for kind in ['PASTE_FORMAT','PASTE_DATA_VALIDATION']:
                 body.append({'copyPaste':{'source':{'sheetId':sid,'startRowIndex':index-1,'endRowIndex':index,'startColumnIndex':0,'endColumnIndex':note_col+1},'destination':{'sheetId':sid,'startRowIndex':row-1,'endRowIndex':row,'startColumnIndex':0,'endColumnIndex':note_col+1},'pasteType':kind}})
+            if len(c['creator'])>26:
+                body.append({'repeatCell':{'range':{'sheetId':sid,'startRowIndex':row-1,'endRowIndex':row,'startColumnIndex':0,'endColumnIndex':1},'cell':{'userEnteredFormat':{'wrapStrategy':'WRAP'}},'fields':'userEnteredFormat.wrapStrategy'}})
+                body.append({'updateDimensionProperties':{'range':{'sheetId':sid,'dimension':'ROWS','startIndex':row-1,'endIndex':row},'properties':{'pixelSize':42},'fields':'pixelSize'}})
             date=(datetime.fromisoformat(c['launch'])-datetime(1899,12,30)).days
             for col,val in {0:c['creator'],1:date,2:c['post_link'],note_col:'Missing numeric KOL fee for CPM/CPE'}.items():
                 body.append(write_range(sid,row,col,[val]));expected[(row,col)]=val
