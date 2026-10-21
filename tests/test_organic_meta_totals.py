@@ -17,6 +17,18 @@ def sheet():
 
 
 class TotalMetricTests(unittest.TestCase):
+    def test_views_api_usage_guard_retains_current_response_and_stops_following_calls(self):
+        from kol_organic_meta_totals import api_read,APIReadError
+        from threading import Event
+        from unittest.mock import Mock
+        stop=Event();env={'META_ACCESS_TOKEN':'test','_META_VIEWS_STOP_EVENT':stop}
+        response=Mock(ok=True,status_code=200,headers={'x-app-usage':'{"total_time":80}'})
+        response.json.return_value={'id':'123'}
+        with patch('kol_organic_meta_totals.requests.get',return_value=response) as get:
+            self.assertEqual(api_read(env,'123'),{'id':'123'})
+            with self.assertRaises(APIReadError):api_read(env,'456')
+        self.assertEqual(get.call_count,1)
+
     def test_views_alone_do_not_complete_recoverable_interaction_job(self):
         from kol_organic_meta_totals import completed_metric_keys
         values=sheet()
@@ -62,18 +74,54 @@ class TotalMetricTests(unittest.TestCase):
         from kol_organic_meta_totals import fetch_totals
         values=sheet();values[1]=values[1]+['Reel ID'];values[2]=values[2]+['12345678901']
         node={'id':'12345678901','permalink':'https://instagram.com/reel/ABC/','username':'eva.hooft','total_like_count':10}
-        with patch('kol_organic_meta_totals.api_read',return_value={'12345678901':node}) as read, \
+        with patch('kol_organic_meta_totals.api_read',side_effect=AssertionError('Views must not depend on media metadata')) as read, \
              patch('kol_organic_meta_totals.creator_media',return_value={'ABC':dict(node,view_count=5442)}):
             content,_=fetch_totals({},values)
         self.assertEqual(content['ABC']['view_count'],5442)
-        requested=read.call_args.args[2]['fields']
-        self.assertNotIn('total_like_count',requested)
-        self.assertNotIn('total_comments_count',requested)
-        self.assertNotIn('shares_count',requested)
-        with patch('kol_organic_meta_totals.api_read',return_value={'12345678901':node}), \
+        self.assertEqual(read.call_count,0)
+        with patch('kol_organic_meta_totals.api_read',return_value=node), \
              patch('kol_organic_meta_totals.creator_media',return_value={'ABC':dict(node,id='OTHER',view_count=99999)}):
             content,_=fetch_totals({},values)
         self.assertNotIn('view_count',content['ABC'])
+
+    def test_views_error_is_actual_business_discovery_failure(self):
+        from kol_organic_meta_totals import fetch_totals,APIReadError
+        values=sheet();values[1]+= ['Reel ID'];values[2]+= ['12345678901']
+        with patch('kol_organic_meta_totals.creator_media',side_effect=APIReadError('HTTP 403 / Meta code 4',code=4)), \
+             patch('kol_organic_meta_totals.api_read',side_effect=AssertionError('Stop metadata requests after rate limit')):
+            content,_=fetch_totals({},values)
+        self.assertIn('HTTP 403 / Meta code 4',content['ABC']['_error'])
+        self.assertNotIn('500',content['ABC']['_error'])
+
+    def test_alias_fallback_uses_single_media_get_not_ids_and_checks_post(self):
+        from kol_organic_meta_totals import fetch_totals
+        values=sheet();values[2][0]='CreatorAlias';values[2]+= ['12345678901']
+        node={'id':'12345678901','permalink':'https://instagram.com/reel/ABC/','username':'real.creator'}
+        def discover(env,username,wanted):
+            return {'ABC':dict(node,view_count=42)} if username=='real.creator' else {}
+        with patch('kol_organic_meta_totals.creator_media',side_effect=discover), \
+             patch('kol_organic_meta_totals.api_read',return_value=node) as read:
+            content,_=fetch_totals({},values)
+        self.assertEqual(content['ABC']['view_count'],42)
+        self.assertEqual(read.call_args.args[1],'12345678901')
+        self.assertNotIn('ids',read.call_args.args[2])
+
+    def test_views_only_plan_preserves_unrelated_failures_and_metrics(self):
+        from kol_organic_meta_totals import views_only_plan
+        values=sheet();values[2][16]='Public Views unavailable: HTTP 500 / Meta code 100; existing values retained; CPM not refreshed: total Views unavailable or zero; API did not return Interaction'
+        content={'ABC':{'id':'123','permalink':'https://instagram.com/reel/ABC/','view_count':200}}
+        item=views_only_plan(values,content)[0]
+        self.assertEqual(item['changes'],{7:200,13:15000})
+        self.assertEqual(item['reason'],'API did not return Interaction')
+        self.assertNotIn(8,item['changes']);self.assertNotIn(14,item['changes'])
+
+    def test_creator_lookup_stops_before_posts_outside_target_year(self):
+        from kol_organic_meta_totals import creator_media
+        data={'business_discovery':{'media':{'data':[{'id':'1','permalink':'https://instagram.com/reel/OLD/','timestamp':'2025-12-01T00:00:00+0000'}],
+                    'paging':{'next':'https://graph.facebook.com/next'}}}}
+        with patch('kol_organic_meta_totals.api_read',return_value=data) as read:
+            self.assertEqual(creator_media({},'eva.hooft',{'ABC'}),{})
+        self.assertEqual(read.call_count,1)
 
     def test_total_views_is_not_business_discovery_view_count(self):
         rows=metric_plan(sheet(),{'ABC':{'id':'123','permalink':'https://instagram.com/reel/ABC/',

@@ -215,6 +215,19 @@ The production entry point is `kol_organic_meta_totals.py`. It verifies both
 returned Media ID and permalink against the exact sheet post, reads H only from
 Business Discovery `view_count`, and reads the original Advertisable Content API's
 `organic_insights.likes`, `comments`, `shares`, `saves` into J:M independently.
+Views queries do not depend on root `?ids=` metadata (deprecated in Graph v26).
+Only failed exact-post lookups may use a single Media GET to recover a username
+alias; successful Views are never discarded because metadata is unavailable.
+Creator pagination stops after finding the requested posts or passing the configured
+publication year. A rate-limit response or 80% app usage defers remaining Views,
+retaining existing values and recording the actual failure reason.
+To refresh only Views, CPM and their managed failure notes without fetching or
+changing other metrics, run:
+
+```bash
+.venv-kol/bin/python -u kol_tracker.py organic-views --apply
+```
+
 Missing Saves are optional and never generate a failure reason. Never substitute
 `total_views_count` or natural Views when Business Discovery Views are missing.
 Public counters are not guaranteed to reproduce a differently dated Business

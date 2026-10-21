@@ -471,7 +471,7 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'check'])
+    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-views', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'check'])
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--creators', nargs='+', help='Organic Meta only: exact Creator names for a focused verification/update')
     args = parser.parse_args()
@@ -484,7 +484,7 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if args.task not in ['daily', 'organic', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll']:
+            if args.task not in ['daily', 'organic', 'organic-views', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll']:
                 print('Another tracker task is running; skipped', flush=True); return
             print('Another tracker task is running; daily update queued', flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -508,6 +508,9 @@ def main():
         elif args.task == 'organic-youtube':
             from kol_organic_youtube import run as youtube_daily
             youtube_daily(env, output, args.apply)
+        elif args.task == 'organic-views':
+            from kol_organic_meta_totals import run_views
+            run_views(env,output,args.apply)
         elif args.task == 'organic':
             organic_meta_daily(env, output, args.apply, creators=args.creators)
         elif args.task == 'organic-tiktok':
