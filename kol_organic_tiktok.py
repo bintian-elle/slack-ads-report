@@ -86,6 +86,8 @@ def backoff_until(now, retry_after):
 
 
 def run(env, output, apply, target_keys=None, link_aliases=None):
+    from kol_targeting import load_link_aliases
+    if link_aliases is None:link_aliases=load_link_aliases(env)
     from kol_tracker import BASE, save_json, sheet_session, read_tab, verify_literal_target
     from update_meta_tracker import write_range
     scoped = dict(env, KOL_TRACKER_GOOGLE_SHEETS_LINK=env['KOL_ORGANIC_SHEETS_LINK'])

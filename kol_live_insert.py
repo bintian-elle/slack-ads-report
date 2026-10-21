@@ -23,6 +23,16 @@ def insert_jobs(env,kind,jobs,output,apply,aliases):
     from sync_creator_tracker import post_key as ig_post
     from add_tiktok_tracker_rows import post_key as tt_post
     session,endpoint,prop,native,values=open_tab(env,kind)
+    if kind.startswith('ads-'):
+        for job in jobs:
+            wanted=job_keys(kind,job,aliases)
+            for row in values[2:]:
+                keys=row_keys(kind,row,aliases)
+                code={k for k in wanted if k.startswith(('igcode:','ttcode:'))}&keys
+                post={k for k in wanted if k.startswith(('ig:','tt:'))}
+                existing_post={k for k in keys if k.startswith(('ig:','tt:'))}
+                if code and post and existing_post and not post&existing_post:
+                    raise RuntimeError('Conflicting Slack post and existing Ad Code')
     if kind in ('ads-meta','ads-tiktok','organic-meta'):
         values,native=backfill_codes(session,endpoint,prop,native,values,kind,jobs,apply,aliases)
     existing=set().union(*(row_keys(kind,row,aliases) for row in values[2 if kind in ('ads-meta','ads-tiktok','organic-meta') else 1:]))

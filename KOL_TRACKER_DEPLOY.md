@@ -213,13 +213,13 @@ remain and the next run does not duplicate them.
 
 The production entry point is `kol_organic_meta_totals.py`. It verifies both
 returned Media ID and permalink against the exact sheet post, reads H only from
-Business Discovery `view_count`, and reads Media `total_like_count`,
-`total_comments_count`, `shares_count`, `saved_count` into J:M. Never substitute
+Business Discovery `view_count`, and reads the original Advertisable Content API's
+`organic_insights.likes`, `comments`, `shares`, `saves` into J:M independently.
+Missing Saves are optional and never generate a failure reason. Never substitute
 `total_views_count` or natural Views when Business Discovery Views are missing.
 Public counters are not guaranteed to reproduce a differently dated Business
 Suite export; compare publication-to-current windows and contemporaneous reads.
-Never substitute natural counters or add Ads
-Insights to these public counters. I/CPE deliberately retain the approved Method A:
+Never substitute natural Views for public Views. I/CPE deliberately retain the approved Method A:
 natural Interaction (four-part fallback only when complete) plus exact-source-media
 Instagram paid net likes, net comments and shares. Paid pause caching remains as
 implemented by `kol_organic_meta.py`; no public counters are added to Method A.
@@ -249,7 +249,7 @@ resolution restrictions retain 24-hour/minimum Retry-After backoff; successful
 TikTok public reads still reuse same-day cache and use 3–7 second request spacing.
 Native writes target exact pending posts only; full ad inventory/report reads may
 still be required to validate Ad Name bindings. A rejected row is isolated; other
-rows/tabs continue. Existing midnight daily defaults are unchanged.
+rows/tabs continue. Existing daily 02:00 America/New_York defaults are unchanged.
 Deduplicate /p/ and /reel/
 by exact shortcode even when the manual Creator cell is blank. API publication
 date is preferred, otherwise use the Slack message date in America/New_York.

@@ -1,4 +1,4 @@
-"""Organic Meta public totals. Never substitute organic counters for totals."""
+"""Organic Meta: public Views, original content counters and Method A Interaction."""
 import copy
 import json
 import math
@@ -16,8 +16,7 @@ from kol_organic_meta import post_key, plan as validate_schema
 COUNTERS = {7:('view_count','Views'), 9:('total_like_count','Likes'),
             10:('total_comments_count','Comments'), 11:('shares_count','Shares'),
             12:('saved_count','Saves')}
-MEDIA_FIELDS = ('id,permalink,username,timestamp,media_type,media_product_type,'
-                'total_like_count,total_comments_count,shares_count,saved_count')
+MEDIA_FIELDS = 'id,permalink,username,timestamp,media_type,media_product_type'
 MANAGED = ('自动：','API did not return ', 'Missing or unsupported post link',
            'KOL fee requires manual entry','CPM ','CPE ','Total ','Public ', 'Slack ',
            'Metrics pending immediate','Immediate update failed','Metrics not available yet')
@@ -31,7 +30,7 @@ def verified_media(media, key):
     return bool(media.get('id') and post_key(media.get('permalink',''))==key)
 
 
-def metric_plan(values, content, method_a=None):
+def metric_plan(values, content, method_a=None, natural_content=None):
     validate_schema(values,{})
     planned=[]
     for row,original in enumerate(values[2:],3):
@@ -42,16 +41,27 @@ def metric_plan(values, content, method_a=None):
         if not key:
             reasons.append('Missing or unsupported post link')
         elif not verified_media(media,key):
-            reasons.append('Total metrics unavailable: '+media.get('_error','exact media unresolved'))
+            reasons.append(('Public Views unavailable: ' if natural_content is not None else 'Total metrics unavailable: ')+media.get('_error','exact media unresolved'))
         else:
             for col,(field,label) in COUNTERS.items():
+                if natural_content is not None and col in (9,10,11,12):continue
                 if number(media.get(field)):changes[col]=media[field]
-                else:missing.append(label)
+                elif col!=12:missing.append(label)  # Optional Saves: retain missing values without a failure note.
             if method_a is None and all(c in changes for c in (9,10,11,12)):
                 changes[8]=sum(changes[c] for c in (9,10,11,12))
             elif method_a is None or not number(method_a.get(row)):
                 missing.insert(0,'Interaction')
             if missing:reasons.append('Total '+ '/'.join(missing)+' unavailable')
+        if natural_content is not None:
+            original_content=natural_content.get(key,{})
+            exact=bool(key and original_content.get('content_id') and post_key(original_content.get('permalink',''))==key)
+            if exact and verified_media(media,key) and str(media['id'])!=str(original_content['content_id']):exact=False
+            metrics=original_content.get('organic_insights',{}) if exact else {}
+            absent=[]
+            for col,field in ((9,'likes'),(10,'comments'),(11,'shares'),(12,'saves')):
+                if number(metrics.get(field)):changes[col]=metrics[field]
+                elif col!=12:absent.append(field.title())
+            if absent:reasons.append('API did not return '+ '/'.join(absent)+('' if exact else ': exact post unresolved'))
         if key and method_a is not None and number(method_a.get(row)):
             changes[8]=method_a[row]
         if reasons:
@@ -80,7 +90,7 @@ def note_changes(values, planned):
     return result
 
 
-def method_a_values(env,values,output,cache_path):
+def method_a_values(env,values,output,cache_path,natural_out=None):
     """Keep the approved existing Interaction calculation; isolate failed batches."""
     from kol_organic_meta import fetch_content,fetch_ad_interactions
     links=sorted({'https://www.instagram.com/reel/'+post_key(row[3])+'/'
@@ -94,6 +104,7 @@ def method_a_values(env,values,output,cache_path):
         for count,batch in enumerate(pool.map(fetch,batches),1):
             natural.update(batch)
             print('Organic Meta Interaction content: %d/%d'%(count,len(batches)),flush=True)
+    if natural_out is not None:natural_out.update(natural)
     if not natural:return {}
     try:_,paid=fetch_ad_interactions(env,natural,cache_path)
     except (RuntimeError,requests.RequestException):
@@ -290,7 +301,16 @@ def write_updates(session, endpoint, prop, native, values, planned, other, outpu
     print('Organic Meta total counters and notes verified: %d/%d rows'%(successful,len(planned)),flush=True)
 
 
+def completed_metric_keys(planned,values,link_aliases=None):
+    from kol_targeting import row_keys
+    return set().union(*(row_keys('organic-meta',values[x['row']-1],link_aliases)
+        for x in planned if all(c in x['changes'] for c in (7,8,9,10,11))
+        and 'target protected' not in x['reason']))
+
+
 def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
+    from kol_targeting import load_link_aliases
+    if link_aliases is None:link_aliases=load_link_aliases(env)
     from kol_tracker import BASE, sheet_session,read_tab,save_json
     from kol_organic_discovery import run as discover
     from kol_organic_meta import code_plan,media_identity_plan,status_plan
@@ -313,8 +333,9 @@ def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
     except (ValueError,OSError):registry={}
     content,registry=fetch_totals(env,selected,discovery,ads,registry)
     save_json(output/'Organic-Meta-Totals-source.json',content)
-    interaction=method_a_values(env,selected,output,state_path.parent/'organic-paid-cache.json')
-    planned=metric_plan(selected,content,interaction)
+    natural={}
+    interaction=method_a_values(env,selected,output,state_path.parent/'organic-paid-cache.json',natural_out=natural)
+    planned=metric_plan(selected,content,interaction,natural_content=natural)
     identity_content={key:{'content_id':mid} for key,mid in registry.items()}
     identity_content.update({key:{'content_id':x['id']} for key,x in content.items() if verified_media(x,key)})
     for row in values[2:]:
@@ -331,5 +352,4 @@ def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
     print('Organic Meta totals planned: %d rows; %d status changes'%(len(planned),len(statuses)),flush=True)
     write_updates(session,endpoint,prop,native,values,planned,codes+media_codes+statuses,output,apply)
     if apply:save_json(state_path,{'posts':registry})
-    return set().union(*(row_keys('organic-meta',values[x['row']-1],link_aliases)
-                         for x in planned if 7 in x['changes'] and 'target protected' not in x['reason']))
+    return completed_metric_keys(planned,values,link_aliases)

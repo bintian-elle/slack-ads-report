@@ -10,7 +10,7 @@ import requests
 from add_tiktok_tracker_rows import plain_text,spark_codes
 from kol_organic_youtube import heading,MARKER,LIVE,URL
 from kol_link_resolution import canonical_post,resolve_post_link,LinkUnavailable
-from kol_targeting import row_keys
+from kol_targeting import row_keys,matches_keys
 
 KINDS={'Meta':('ads-meta','organic-meta'),'TikTok':('ads-tiktok','organic-tiktok'),
        'YouTube':('organic-youtube',)}
@@ -74,10 +74,13 @@ def launch_events(messages,oldest):
 
 def enrich_messages(messages,state,now,oldest,resolver=resolve_post_link):
     aliases=state.setdefault('link_aliases',{});errors=state.setdefault('link_errors',{});result=[]
+    unresolved=state.setdefault('unresolved_messages',{})
+    messages=list({m['ts']:m for m in list(unresolved.values())+messages}.values())
     active_roots={message.get('thread_ts') for message in messages if message_time(message)>=oldest}
     for message in messages:
         fresh=dict(message);text=html.unescape(message.get('text',''))
-        if message_time(message)>=oldest or message['ts'] in active_roots:
+        retry=any(link.rstrip(').,*') in errors and errors[link.rstrip(').,*')].get('retry_at',0)<=now for link in URL.findall(text))
+        if message_time(message)>=oldest or message['ts'] in active_roots or retry:
             for link in URL.findall(text):
                 link=link.rstrip(').,*');canonical=canonical_post(link)
                 host=urlsplit(link).hostname
@@ -86,23 +89,29 @@ def enrich_messages(messages,state,now,oldest,resolver=resolve_post_link):
                     (host in ('google.com','www.google.com') and urlsplit(link).path=='/url'))
                 if not canonical and eligible:
                     canonical=aliases.get(link,'')
+                    was_failed=link in errors
                     if not canonical and errors.get(link,{}).get('retry_at',0)<=now:
                         try:
                             canonical=resolver(link)
-                            line=next((line for line in text.splitlines() if link in line),'')
-                            expected=('www.tiktok.com' if re.search(r'\b(?:TT|TikTok)\b',line,re.I) else
-                                      'www.youtube.com' if re.search(r'\b(?:YT|YTB|YouTube)\b',line,re.I) else
-                                      'www.instagram.com' if re.search(r'\b(?:IG|Instagram)\b',line,re.I) else '')
-                            if expected and urlsplit(canonical).hostname!=expected:
-                                errors[link]={'reason':'Slack platform and resolved post conflict','retry_at':now+86400}
-                                text=text.replace(link,'[Conflicting platform link omitted]');canonical=''
-                            else:aliases[link]=canonical;errors.pop(link,None)
+                            aliases[link]=canonical;errors.pop(link,None)
                         except LinkUnavailable as error:
                             errors[link]={'reason':str(error),'retry_at':now+(86400 if error.blocked else 1800)}
+                    line=next((line for line in text.splitlines() if link in line),'')
+                    expected=('www.tiktok.com' if re.search(r'\b(?:TT|TikTok)\b',line,re.I) else
+                              'www.youtube.com' if re.search(r'\b(?:YT|YTB|YouTube)\b',line,re.I) else
+                              'www.instagram.com' if re.search(r'\b(?:IG|Instagram)\b',line,re.I) else '')
+                    if canonical and expected and urlsplit(canonical).hostname!=expected:
+                        errors[link]={'reason':'Slack platform and resolved post conflict','retry_at':now+86400}
+                        text=text.replace(link,'[Conflicting platform link omitted]');canonical=''
+                    elif canonical:
+                        errors.pop(link,None)
+                        if was_failed:fresh['edited']={'ts':str(now)}
                 if errors.get(link,{}).get('reason')=='Slack platform and resolved post conflict':
                     text=text.replace(link,'[Conflicting platform link omitted]')
                 elif canonical:text=text.replace(link,canonical)
         fresh['text']=text;result.append(fresh)
+        if any(link.rstrip(').,*') in errors for link in URL.findall(message.get('text',''))):unresolved[message['ts']]=dict(message)
+        else:unresolved.pop(message['ts'],None)
     return result
 
 def job_keys(kind,job,aliases=None):
@@ -120,7 +129,7 @@ def enqueue_jobs(state,events,now):
             if kind.startswith('ads-') and (not event.get('ad_code') or event.get('conflict')):continue
             keys=job_keys(kind,event,state.get('link_aliases'))
             if not keys:continue
-            primary=next(iter(sorted(keys)))
+            primary=next(iter(sorted(k for k in keys if not k.startswith(('igcode:','ttcode:')))),next(iter(sorted(keys))))
             job_id=kind+'|'+primary
             if job_id in done:continue
             if job_id not in jobs:
@@ -152,7 +161,7 @@ def dispatch_jobs(state,handlers,insert,save,now,on_failure=None):
                         row_errors[key]='Immediate update failed ('+type(individual).__name__+'); existing values retained'
         failed=[]
         for key,job in pending.items():
-            if job_keys(kind,job,state.get('link_aliases'))&success:
+            if matches_keys(job_keys(kind,job,state.get('link_aliases')),success):
                 completed[key]=now;jobs.pop(key,None)
             else:
                 job['attempts']=job.get('attempts',0)+1

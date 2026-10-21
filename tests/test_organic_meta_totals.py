@@ -17,14 +17,59 @@ def sheet():
 
 
 class TotalMetricTests(unittest.TestCase):
+    def test_views_alone_do_not_complete_recoverable_interaction_job(self):
+        from kol_organic_meta_totals import completed_metric_keys
+        values=sheet()
+        self.assertEqual(completed_metric_keys([{'row':3,'changes':{7:100,9:1,10:2,11:3},'reason':'Interaction unavailable'}],values),set())
+        self.assertEqual(completed_metric_keys([{'row':3,'changes':{7:100,8:6,9:1,10:2,11:3},'reason':''}],values),{'ig:ABC'})
+
+    def test_original_counters_independent_of_public_views_and_total_counters(self):
+        natural={'ABC':{'content_id':'123','permalink':'https://instagram.com/reel/ABC/',
+                        'organic_insights':{'likes':42,'comments':16,'shares':9,'saves':0}}}
+        public={'ABC':{'id':'123','permalink':'https://instagram.com/reel/ABC/',
+                       'view_count':1764,'total_like_count':999,'total_comments_count':999,'shares_count':999}}
+        item=metric_plan(sheet(),public,{3:675},natural_content=natural)[0]
+        self.assertEqual({c:item['changes'][c] for c in (7,8,9,10,11,12)},
+                         {7:1764,8:675,9:42,10:16,11:9,12:0})
+        self.assertAlmostEqual(item['changes'][14],3000/675)
+        self.assertEqual(item['reason'],'')
+        item=metric_plan(sheet(),{'ABC':{'_error':'HTTP 500'}},{3:675},natural_content=natural)[0]
+        self.assertEqual([item['changes'][c] for c in (9,10,11)],[42,16,9])
+        self.assertNotIn(7,item['changes'])
+        self.assertNotIn('Likes',item['reason'])
+        self.assertNotIn('Comments',item['reason'])
+        self.assertNotIn('Shares',item['reason'])
+
+    def test_original_counters_reject_different_post(self):
+        natural={'ABC':{'content_id':'123','permalink':'https://instagram.com/reel/OTHER/',
+                        'organic_insights':{'likes':42,'comments':16,'shares':9}}}
+        item=metric_plan(sheet(),{},method_a={},natural_content=natural)[0]
+        self.assertFalse(any(c in item['changes'] for c in (9,10,11)))
+
+    def test_natural_counters_survive_paid_interaction_failure(self):
+        from kol_organic_meta_totals import method_a_values
+        natural={'ABC':{'content_id':'123','permalink':'https://instagram.com/reel/ABC/',
+                        'organic_insights':{'likes':42,'comments':16,'shares':9}}}
+        collected={}
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('kol_organic_meta.fetch_content',return_value=natural), \
+             patch('kol_organic_meta.fetch_ad_interactions',side_effect=RuntimeError('Unavailable')):
+            result=method_a_values({},sheet(),Path(directory),Path(directory)/'cache',natural_out=collected)
+        self.assertEqual(result,{})
+        self.assertEqual(collected,natural)
+
     def test_fetch_binds_business_views_by_both_media_id_and_permalink(self):
         from kol_organic_meta_totals import fetch_totals
         values=sheet();values[1]=values[1]+['Reel ID'];values[2]=values[2]+['12345678901']
         node={'id':'12345678901','permalink':'https://instagram.com/reel/ABC/','username':'eva.hooft','total_like_count':10}
-        with patch('kol_organic_meta_totals.api_read',return_value={'12345678901':node}), \
+        with patch('kol_organic_meta_totals.api_read',return_value={'12345678901':node}) as read, \
              patch('kol_organic_meta_totals.creator_media',return_value={'ABC':dict(node,view_count=5442)}):
             content,_=fetch_totals({},values)
         self.assertEqual(content['ABC']['view_count'],5442)
+        requested=read.call_args.args[2]['fields']
+        self.assertNotIn('total_like_count',requested)
+        self.assertNotIn('total_comments_count',requested)
+        self.assertNotIn('shares_count',requested)
         with patch('kol_organic_meta_totals.api_read',return_value={'12345678901':node}), \
              patch('kol_organic_meta_totals.creator_media',return_value={'ABC':dict(node,id='OTHER',view_count=99999)}):
             content,_=fetch_totals({},values)
@@ -42,8 +87,10 @@ class TotalMetricTests(unittest.TestCase):
             method_a={3:675})
         self.assertEqual(rows[0]['changes'][8],675)
         self.assertAlmostEqual(rows[0]['changes'][14],3000/675)
-        self.assertEqual(rows[0]['missing'],['Saves'])
+        self.assertEqual(rows[0]['missing'],[])
         self.assertNotIn('Interaction',rows[0]['reason'])
+        self.assertEqual(rows[0]['reason'],'')
+        self.assertNotIn(12,rows[0]['changes'])
 
     def test_method_a_still_updates_when_public_counters_fail(self):
         rows=metric_plan(sheet(),{},method_a={3:675})
@@ -80,7 +127,7 @@ class TotalMetricTests(unittest.TestCase):
         self.assertNotIn(12,rows[0]['changes'])
         self.assertNotIn(14,rows[0]['changes'])
         self.assertIn('existing values retained',rows[0]['reason'])
-        self.assertIn('Saves',rows[0]['reason'])
+        self.assertNotIn('Saves',rows[0]['reason'])
 
     def test_no_natural_fallback(self):
         rows=metric_plan(sheet(),{'ABC':{'id':'123','permalink':'https://instagram.com/reel/ABC/',

@@ -88,6 +88,8 @@ def main():
 
 
 def run(env, output, apply, target_keys=None, link_aliases=None):
+    from kol_targeting import load_link_aliases,matches_target
+    if link_aliases is None:link_aliases=load_link_aliases(env)
     from tracker_failure_notes import plan_notes
     from kol_tracker import verify_literal_target
     before = read_sheet(env, all_columns=True)
@@ -128,7 +130,7 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
     matches, skips, conflicts=exact_mapping(rows,ads)
     from kol_targeting import row_keys,scope_values
     if target_keys is not None:
-        selected={n for n,row in rows if row_keys('ads-meta',row,link_aliases)&set(target_keys)}
+        selected={n for n,row in rows if matches_target('ads-meta',row,target_keys,link_aliases)}
         rows=[(n,row) for n,row in rows if n in selected]
         matches={n:ids for n,ids in matches.items() if n in selected}
         skips=[item for item in skips if item['row'] in selected]
@@ -258,9 +260,9 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
         for col,value in item['changes'].items():
             row=after['values'][item['row']-1]
             if (row[col] if col<len(row) else '')!=value: raise RuntimeError('Failure reason verification failed')
-    return set().union(*(row_keys('ads-meta',raw[item['row']-1],link_aliases) for item in updated))
     (output/(stamp+'-after.json')).write_text(json.dumps(after,ensure_ascii=False,indent=2))
     print('APPLIED AND VERIFIED',len(updated),'metric rows; new row',new_number,flush=True)
+    return set().union(*(row_keys('ads-meta',raw[item['row']-1],link_aliases) for item in updated))
 
 
 if __name__=='__main__':

@@ -404,6 +404,8 @@ def tiktok_bindings(values, ads, details=None):
 
 
 def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
+    from kol_targeting import load_link_aliases,matches_target
+    if link_aliases is None:link_aliases=load_link_aliases(env)
     from tracker_failure_notes import plan_notes
     session, endpoint = sheet_session(env)
     prop, native, values = read_tab(session, endpoint, 'TikTok')
@@ -412,7 +414,7 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
     working=resolve_values(values,'ads-tiktok',link_aliases)
     planned, skipped = tiktok_bindings(working, fetch_report(env), details)
     if target_keys is not None:
-        selected={i for i,row in enumerate(working,1) if i>2 and row_keys('ads-tiktok',row)&set(target_keys)}
+        selected={i for i,row in enumerate(working,1) if i>2 and matches_target('ads-tiktok',row,target_keys)}
         planned=[x for x in planned if x['row'] in selected]
         skipped=[x for x in skipped if x['row'] in selected]
     partial = [{'row':item['row'],'reason':'ROAS and Reach retained: multiple ads cannot be safely aggregated'}

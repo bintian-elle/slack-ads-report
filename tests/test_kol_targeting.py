@@ -2,6 +2,18 @@ import unittest
 from kol_targeting import scope_values,row_keys
 
 class TargetTests(unittest.TestCase):
+    def test_code_never_selects_a_different_explicit_post(self):
+        rows=[[],[],['Eva','','','','','','https://instagram.com/reel/OLD/','Q9jTShared']]
+        self.assertEqual(scope_values(rows,'ads-meta',{'ig:NEW','igcode:Q9jTShared'})[2],[])
+
+    def test_daily_aliases_load_from_persisted_live_registry(self):
+        import tempfile,json
+        from pathlib import Path
+        from kol_targeting import load_link_aliases
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory,'live-metric-jobs.json').write_text(json.dumps({'link_aliases':{'raw':'canonical'}}))
+            self.assertEqual(load_link_aliases({'KOL_TRACKER_STATE_DIR':directory}),{'raw':'canonical'})
+
     def test_two_posts_same_creator_only_exact_target(self):
         rows=[[],[],['Eva','','','https://instagram.com/reel/ONE/'],
               ['Eva','','','https://instagram.com/reel/TWO/']]

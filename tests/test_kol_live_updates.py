@@ -3,6 +3,30 @@ import unittest
 from kol_live_updates import launch_events,enqueue_jobs,dispatch_jobs,enrich_messages
 
 class LiveTests(unittest.TestCase):
+    def test_cached_alias_still_checks_slack_platform(self):
+        raw='https://wearerow.mxficus.com/l/cached'
+        state={'link_aliases':{raw:'https://www.tiktok.com/@a/video/123'}}
+        messages=[{'ts':'100','text':"[KOL Content is Live]\nEva's content is live\nYouTube: "+raw}]
+        self.assertFalse(launch_events(enrich_messages(messages,state,100,0),0))
+
+    def test_failed_reply_link_retries_without_new_slack_reply(self):
+        from kol_link_resolution import LinkUnavailable
+        parent={'ts':'1','text':"[KOL Content is Live]\nEva's content is live"}
+        reply={'ts':'100','thread_ts':'1','text':'IG: https://wearerow.mxficus.com/l/retry'}
+        state={}
+        def unavailable(url):raise LinkUnavailable('temporary')
+        enrich_messages([parent,reply],state,100,50,unavailable)
+        resolved=enrich_messages([parent],state,2000,1500,lambda url:'https://www.instagram.com/reel/ABC/')
+        events=launch_events(resolved,1500)
+        self.assertEqual([(x['creator'],x['post_link']) for x in events],[('Eva','https://www.instagram.com/reel/ABC/')])
+
+    def test_conflicting_post_code_jobs_do_not_complete_each_other(self):
+        event={'platform':'Meta','creator':'Eva','post_link':'https://instagram.com/reel/NEW/','ts':'100','ad_code':'Q9jTShared'}
+        state={};enqueue_jobs(state,[event],100)
+        handlers={k:lambda jobs:{'ig:OLD','igcode:Q9jTShared'} for k in ('ads-meta','organic-meta')}
+        dispatch_jobs(state,handlers,lambda *a:None,lambda:None,100)
+        self.assertEqual(len(state['jobs']),2)
+
     def test_platforms_do_not_cross_creators(self):
         text="[KOL Content is Live]\n1. hannnahmitchelll's content is live\nTikTok: https://www.tiktok.com/@hannahhlyyn/video/7698432185451302175\n#"+'a'*40+"\n2. nutritionbyanastasiia's content is live\nIG: https://instagram.com/p/DeregCnx1U8/\nQ9jTNutrition\nYT: https://youtube.com/shorts/m3voSsAfZQw"
         events=launch_events([{'ts':'100','text':text}],0)
