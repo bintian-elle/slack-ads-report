@@ -17,6 +17,16 @@ def response(data, status=200, usage=None):
 
 
 class MetaRuntimeTests(unittest.TestCase):
+    def test_cooldown_resume_reuses_inventory_snapshot_without_restarting_pages(self):
+        calls=[]
+        def network(session,method,url,**kwargs):
+            calls.append(url);return response({'data':[]})
+        with tempfile.TemporaryDirectory() as directory,patch('requests.sessions.Session.request',network):
+            with self.runtime(directory) as runtime,runtime.stage('organic-meta'):
+                requests.get('https://graph.facebook.com/act_1/ads')
+            with self.runtime(directory,now=lambda:1792584000) as runtime,runtime.stage('organic-meta',resume=True):
+                requests.get('https://graph.facebook.com/act_1/ads')
+            self.assertEqual(len(calls),1)
     def test_interruption_leaves_inflight_stage_for_poll_resume(self):
         from kol_meta_runtime import run_stage
         def interrupted():raise KeyboardInterrupt()

@@ -26,6 +26,12 @@ def reporting_window(now=None):
     return current.date().isoformat()
 
 
+def next_boundary(now):
+    current=datetime.fromtimestamp(now,ZoneInfo('America/New_York'))
+    day=current if current.hour<2 else current+timedelta(days=1)
+    return day.replace(hour=2,minute=0,second=0,microsecond=0).timestamp()
+
+
 def clean_url(url):
     parts=urlsplit(url)
     return urlunsplit(parts._replace(query=urlencode(sorted((k,v) for k,v in parse_qsl(parts.query,keep_blank_values=True)
@@ -44,12 +50,17 @@ class MetaRuntime:
         self.root=Path(root);self.root.mkdir(parents=True,exist_ok=True)
         self.path=self.root/'meta-request-progress.json'
         self.now=now;self.budget=max(1,min(100,int(budget)));self.persist=persist;self.token_hash=hashlib.sha256(token.encode()).hexdigest()
-        self.lock=threading.RLock();self.current='poll';self.sent=0;self.hits=0;self.deferred=set()
+        self.lock=threading.RLock();self.current='poll';self.resuming=False;self.sent=0;self.hits=0;self.deferred=set()
         try:self.state=json.loads(self.path.read_text())
         except (OSError,ValueError):self.state={}
         if self.state.get('token')!=self.token_hash:self.state={}
         self.state.update(token=self.token_hash)
         self.state.setdefault('cache',{});self.state.setdefault('pending',{})
+        for item in self.state['cache'].values():
+            # Migrate the initial short-lived inventory checkpoints while they
+            # are still fresh; preserve them across an already queued cooldown.
+            if 'data' in item and item.get('status',200)==200 and 'fresh_until' not in item and self.now()<item.get('until',0)<=self.now()+900:
+                item['fresh_until']=item['until'];item['until']=next_boundary(self.now())
         self.state['cache']={k:v for k,v in self.state['cache'].items() if v.get('until',0)>self.now()}
 
     def save(self):
@@ -58,10 +69,10 @@ class MetaRuntime:
         save_json(self.path,self.state)
 
     @contextmanager
-    def stage(self,name):
-        previous=self.current;self.current=name
+    def stage(self,name,resume=False):
+        previous=(self.current,self.resuming);self.current=name;self.resuming=resume
         try:yield
-        finally:self.current=previous
+        finally:self.current,self.resuming=previous
 
     def pending(self,due=False):
         return [k for k,v in self.state['pending'].items() if not due or v.get('retry_at',0)<=self.now()]
@@ -102,7 +113,7 @@ class MetaRuntime:
             canonical=json.dumps([path,sorted(query.items())],sort_keys=True)
             key=hashlib.sha256(canonical.encode()).hexdigest()
             cached=self.state['cache'].get(key)
-            if cached and cached['until']>self.now():
+            if cached and cached['until']>self.now() and (self.resuming or cached.get('fresh_until',cached['until'])>self.now()):
                 self.hits+=1
                 if cached.get('failure'):
                     self.defer(cached['failure'],max(1,cached['until']-self.now()))
@@ -147,11 +158,9 @@ class MetaRuntime:
             if result.ok and isinstance(data,dict) and 'error' not in data:
                 # Fresh inventory is short-lived; metric pages remain resumable
                 # until the next Eastern daily reporting boundary.
-                current=datetime.fromtimestamp(self.now(),ZoneInfo('America/New_York'))
-                next_day=(current+timedelta(days=1)).replace(hour=2,minute=0,second=0,microsecond=0)
-                if current.hour<2:next_day=current.replace(hour=2,minute=0,second=0,microsecond=0)
+                until=next_boundary(self.now())
                 inventory=path.endswith('/ads') or ('fields' in query and 'business_discovery' not in query['fields'] and 'media' not in path and 'insights' not in path and 'organic_insights' not in query['fields'])
-                self.state['cache'][key]={'data':clean_data(data),'until':min(next_day.timestamp(),self.now()+900) if inventory else next_day.timestamp()}
+                self.state['cache'][key]={'data':clean_data(data),'until':until,'fresh_until':min(until,self.now()+900) if inventory else until}
             elif result.status_code>=500:
                 reason='Meta temporary HTTP %d; queued for retry'%result.status_code
                 self.state['cache'][key]={'failure':reason,'until':self.now()+1800}
@@ -166,8 +175,8 @@ class MetaRuntime:
             return result
 
 
-def run_stage(runtime,name,action):
-    with runtime.stage(name):
+def run_stage(runtime,name,action,resume=False):
+    with runtime.stage(name,resume=resume):
         # Persist before side effects: SIGTERM/power loss cannot silently lose
         # a stage that has already consumed quota and saved response pages.
         runtime.state['pending'][name]={'retry_at':runtime.now()+300,'reason':'Meta stage in progress; resume after interruption'}
@@ -189,6 +198,6 @@ def resume_pending(runtime,env,output,apply):
         if name not in actions:continue
         target=output/('resume-'+name);target.mkdir(exist_ok=True)
         print('KOL Meta resuming '+name,flush=True)
-        try:run_stage(runtime,name,lambda:actions[name](env,target,apply))
+        try:run_stage(runtime,name,lambda:actions[name](env,target,apply),resume=True)
         except (RuntimeError,requests.RequestException):
             print('KOL Meta '+name+' remains queued',flush=True)

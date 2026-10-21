@@ -251,7 +251,9 @@ Other hosts/apps sharing Meta credentials remain outside this guard.
   schedule; they are not frozen just because advertising is paused.
 - Successful Graph response pages are atomic private checkpoints in
   `meta-request-progress.json`. Metric pages expire at the next Eastern 02:00
-  boundary; inventories expire after 15 minutes. Paid/advertising metric caches
+  boundary; normal inventory reads refresh after 15 minutes. A queued continuation
+  reuses that reporting window's inventory snapshot across cooldowns so it does
+  not restart discovery/pagination; the next daily boundary refreshes it. Paid/advertising metric caches
   also track the reporting window and pause state. A retry never publishes a
   partial ad sum or substitutes stale missing data.
 - Each invocation sends at most 40 Meta network requests by default
