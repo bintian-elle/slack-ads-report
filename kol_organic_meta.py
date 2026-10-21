@@ -56,7 +56,7 @@ AD_INTERACTION_FIELDS = ('onsite_conversion.post_net_like',
 PAUSED_STATUSES = {'PAUSED', 'ADSET_PAUSED', 'CAMPAIGN_PAUSED'}
 
 
-def paid_cache_decision(entry, status, today, grace_days=30, refresh_days=7):
+def paid_cache_decision(entry, status, today, grace_days=7, refresh_days=7):
     """Observation-based grace period, never infer pause time from creation."""
     if status not in PAUSED_STATUSES:
         return True, None
@@ -85,6 +85,8 @@ def valid_number(value):
 def fetch_ad_interactions(env, content, cache_path=None):
     """Complete inventory, exact source-media binding, Instagram-only Method A."""
     from sync_creator_tracker import get_json, graph_pages
+    from kol_meta_runtime import reporting_window,MetaDeferred
+    cycle=reporting_window()
     session = requests.Session()
     session.headers['Authorization'] = 'Bearer ' + env['META_ACCESS_TOKEN']
     base = 'https://graph.facebook.com/' + env.get('KOL_TRACKER_META_API_VERSION', 'v23.0')
@@ -113,18 +115,22 @@ def fetch_ad_interactions(env, content, cache_path=None):
                 cached = saved['ads']
         except (ValueError, OSError):
             pass  # A corrupt cache triggers a full fresh read, never zero metrics.
-    grace = max(30, int(env.get('KOL_ORGANIC_PAUSED_GRACE_DAYS', '30')))
+    grace = 7
     interval = max(1, int(env.get('KOL_ORGANIC_PAUSED_REFRESH_DAYS', '7')))
     by_id = {ad['id']: ad for ad in ads}
     # Disappeared/unbound ads must establish a new pause observation if they return.
     cached = {aid: entry for aid, entry in cached.items() if aid in ids}
     totals, refresh_ids, pause_dates = {}, [], {}
+    ids.sort(key=lambda aid:(by_id[aid].get('effective_status') in PAUSED_STATUSES,aid))
     for aid in ids:
         entry = cached.get(aid, {})
         if not isinstance(entry, dict) or entry.get('since') != starts[aid]:
             entry = {}
         refresh, pause_dates[aid] = paid_cache_decision(
             entry, by_id[aid].get('effective_status'), today, grace, interval)
+        same_status=(entry.get('paused_since') is not None)==(by_id[aid].get('effective_status') in PAUSED_STATUSES)
+        if entry.get('cycle')==cycle and entry.get('fetched_on')==cutoff and valid_number(entry.get('value')) and same_status:
+            refresh=False
         if refresh:
             refresh_ids.append(aid)
         else:
@@ -154,23 +160,31 @@ def fetch_ad_interactions(env, content, cache_path=None):
         finally:
             worker.close()
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        for index, (aid, total) in enumerate(pool.map(read_ad, refresh_ids), 1):
-            totals[aid] = total
-            cached[aid] = {'value': total, 'since': starts[aid], 'fetched_on': cutoff,
-                           'paused_since': pause_dates[aid]}
-            if index % 25 == 0 or index == len(refresh_ids):
-                print('Organic Method A ad progress: %d/%d' % (index, len(refresh_ids)), flush=True)
-    if cache_path:
+    def checkpoint():
+        if not cache_path:return
         path = Path(cache_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix('.tmp')
         temporary.write_text(json.dumps({'scope': scope, 'ads': cached}))
         os.replace(temporary, path)
+    for index,aid in enumerate(refresh_ids,1):
+        try:_,total=read_ad(aid)
+        except (RuntimeError,requests.RequestException) as error:
+            if isinstance(error,MetaDeferred):break
+            runtime=env.get('_KOL_META_RUNTIME')
+            if runtime:runtime.defer('Meta paid interaction incomplete; queued for retry',1800)
+            continue
+        totals[aid] = total
+        cached[aid] = {'value': total, 'since': starts[aid], 'fetched_on': cutoff,
+                       'paused_since': pause_dates[aid],'cycle':cycle}
+        checkpoint()
+        if index % 25 == 0 or index == len(refresh_ids):
+            print('Organic Method A ad progress: %d/%d' % (index, len(refresh_ids)), flush=True)
+    checkpoint()
     paid = {cid: {'value': sum(totals[aid] for aid in group),
                   'ad_ids': sorted(group), 'cutoff': cutoff,
                   'ad_fetched_on': {aid: cached[aid]['fetched_on'] for aid in group}}
-            for cid, group in by_media.items()}
+            for cid, group in by_media.items() if group.issubset(totals)}
     return ads, paid
 
 

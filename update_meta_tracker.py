@@ -73,6 +73,52 @@ def write_range(sheet_id, row, start, values):
         'rows': [{'values': [cell(v) for v in values]}], 'fields': 'userEnteredValue'}}
 
 
+def resumable_insights(session,base,account,ads,bound,start,end,cache_path,batch_size=20,observed_day=None,runtime=None):
+    """Exact-bound ads only; checkpoint each completed active-first group."""
+    from kol_organic_meta import paid_cache_decision,PAUSED_STATUSES
+    from kol_tracker import save_json
+    from kol_meta_runtime import MetaDeferred,reporting_window
+    cycle=reporting_window()
+    scope=[base,account,start];today=datetime.strptime(observed_day or end,'%Y-%m-%d').date()
+    try:saved=json.loads(Path(cache_path).read_text())
+    except (OSError,ValueError):saved={}
+    cached=saved.get('ads',{}) if saved.get('scope')==scope else {}
+    result=[];complete=set();due=[];byid={ad['id']:ad for ad in ads}
+    for aid in sorted(bound,key=lambda aid:(byid[aid].get('effective_status') in PAUSED_STATUSES,aid)):
+        entry=cached.get(aid,{})
+        decision=dict(entry,value=0)  # Cache rows can legitimately be empty.
+        refresh,pause=paid_cache_decision(decision,byid[aid].get('effective_status'),today)
+        same_status=(entry.get('paused_since') is not None)==(byid[aid].get('effective_status') in PAUSED_STATUSES)
+        fresh=entry.get('cycle')==cycle and entry.get('fetched_on')==today.isoformat() and entry.get('cutoff',end)==end and same_status
+        if isinstance(entry.get('rows'),list) and (not refresh or fresh):
+            result.extend(entry['rows']);complete.add(aid)
+        else:due.append((aid,pause))
+    for offset in range(0,len(due),batch_size):
+        group=due[offset:offset+batch_size]
+        # Never let a paused group occupy a batch ahead of an active group.
+        if any(byid[aid].get('effective_status') in PAUSED_STATUSES for aid,_ in group) and any(byid[aid].get('effective_status') not in PAUSED_STATUSES for aid,_ in group):
+            split=next(i for i,(aid,_) in enumerate(group) if byid[aid].get('effective_status') in PAUSED_STATUSES)
+            groups=[group[:split],group[split:]]
+        else:groups=[group]
+        for batch in groups:
+            try:rows=graph_pages(session,base+'/'+account+'/insights',{'level':'ad',
+                'fields':'ad_id,ad_name,spend,impressions,clicks,inline_link_clicks,actions,action_values,date_start,date_stop',
+                'time_range':json.dumps({'since':start,'until':end}),
+                'filtering':json.dumps([{'field':'ad.id','operator':'IN','value':[aid for aid,_ in batch]}]),
+                'use_unified_attribution_setting':'true','limit':100})
+            except MetaDeferred:return result,complete
+            except (RuntimeError,requests.RequestException):
+                if runtime:runtime.defer('Meta Ads Insights group incomplete; queued for retry',1800)
+                continue
+            for aid,pause in batch:
+                data=[row for row in rows if row['ad_id']==aid]
+                cached[aid]={'rows':data,'paused_since':pause,'fetched_on':today.isoformat(),'cutoff':end,'cycle':cycle}
+                result.extend(data);complete.add(aid)
+            save_json(Path(cache_path),{'scope':scope,'ads':cached})
+            print('Meta Ads Insights checkpoint: %d/%d ads'%(len(complete),len(bound)),flush=True)
+    return result,complete
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--apply', action='store_true')
@@ -146,16 +192,12 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
             date=min(datetime.strptime(a['created_time'],'%Y-%m-%dT%H:%M:%S%z').astimezone(ZoneInfo(info['timezone_name'])).date() for a in matched)
             row[2]=(date-datetime(1899,12,30).date()).days
     print('Exact identity mapping complete:',len(matches),'rows; fetching cumulative Insights',flush=True)
-    if target_keys is None:
-        insights=fetch_insights(s,base,account,env.get('KOL_TRACKER_START_DATE','2025-01-01'),end)
-    else:
+    if target_keys is not None:
         end=datetime.now(ZoneInfo(info['timezone_name'])).date().isoformat()
-        bound=sorted({aid for ids in matches.values() for aid in ids})
-        insights=graph_pages(s,base+'/'+account+'/insights',{'level':'ad',
-            'fields':'ad_id,ad_name,spend,impressions,clicks,inline_link_clicks,actions,action_values,date_start,date_stop',
-            'time_range':json.dumps({'since':env.get('KOL_TRACKER_START_DATE','2025-01-01'),'until':end}),
-            'filtering':json.dumps([{'field':'ad.id','operator':'IN','value':bound}]),
-            'use_unified_attribution_setting':'true','limit':100}) if bound else []
+    bound={aid for ids in matches.values() for aid in ids}
+    cache_root=Path(env.get('KOL_TRACKER_STATE_DIR',str(BASE/'data/processed/kol_tracker_runtime')))
+    insights,complete_ads=resumable_insights(s,base,account,ads,bound,env.get('KOL_TRACKER_START_DATE','2025-01-01'),end,
+        cache_root/'ads-meta-insights-progress.json',observed_day=datetime.now(ZoneInfo(info['timezone_name'])).date().isoformat(),runtime=env.get('_KOL_META_RUNTIME'))
     byad=defaultdict(list)
     for r in insights: byad[r['ad_id']].append(r)
     requests_body=[]; updated=[]
@@ -186,6 +228,9 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
             requests_body.append({'copyPaste':{'source':formula_source,'destination':formula_dest,'pasteType':'PASTE_FORMULA'}})
     for number,row in rows:
         if number not in matches: continue
+        if not set(matches[number]).issubset(complete_ads):
+            skips.append({'row':number,'creator':row[1],'reason':'Meta batch incomplete; queued for retry; existing metrics retained'})
+            continue
         observed=[r for aid in matches[number] for r in byad[aid]]
         if not observed:
             skips.append({'row':number,'creator':row[1],'reason':'Matched ads have no returned Insights; preserve existing metrics'})

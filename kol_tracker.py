@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 from collections import Counter
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -480,7 +481,7 @@ def main():
     env = dict(os.environ)
     state_dir = Path(env.get('KOL_TRACKER_STATE_DIR', str(BASE / 'data/processed/kol_tracker_runtime')))
     state_dir.mkdir(parents=True, exist_ok=True)
-    with (state_dir / 'task.lock').open('w') as lock:
+    with (state_dir / 'task.lock').open('w') as lock, ExitStack() as resources:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -496,12 +497,17 @@ def main():
                 prop, _, _ = read_tab(session, endpoint, title)
                 print(title + ' native sheet accessible: ' + str(prop['sheetId']))
             print('Tracker configuration check passed; no writes'); return
+        from kol_meta_runtime import MetaRuntime,run_stage,resume_pending
+        runtime=resources.enter_context(MetaRuntime(state_dir,env['META_ACCESS_TOKEN'],
+            budget=int(env.get('KOL_META_REQUEST_BATCH_SIZE','40')),persist=args.apply))
+        env['_KOL_META_RUNTIME']=runtime
         if args.task == 'poll':
             from kol_live_updates import poll as live_poll
             live_poll(env,output,args.apply)
+            if args.apply:resume_pending(runtime,env,output,args.apply)
         elif args.task == 'organic-meta-poll':
             from kol_organic_meta_slack import poll as organic_slack_poll
-            organic_slack_poll(env,output,args.apply)
+            run_stage(runtime,'organic-meta',lambda:organic_slack_poll(env,output,args.apply))
         elif args.task == 'youtube-poll':
             from kol_organic_youtube import poll as youtube_poll
             youtube_poll(env, output, args.apply)
@@ -510,9 +516,9 @@ def main():
             youtube_daily(env, output, args.apply)
         elif args.task == 'organic-views':
             from kol_organic_meta_totals import run_views
-            run_views(env,output,args.apply)
+            run_stage(runtime,'organic-views',lambda:run_views(env,output,args.apply))
         elif args.task == 'organic':
-            organic_meta_daily(env, output, args.apply, creators=args.creators)
+            run_stage(runtime,'organic-meta',lambda:organic_meta_daily(env, output, args.apply, creators=args.creators))
         elif args.task == 'organic-tiktok':
             organic_tiktok_daily(env, output, args.apply)
         else:
@@ -526,7 +532,9 @@ def main():
                                  [('Organic YouTube', lambda: youtube_daily(env, output, args.apply))]
                                  if env.get('KOL_ORGANIC_SHEETS_LINK') and env.get('YOUTUBE_API_KEY') else []):
                 try:
-                    action()
+                    stage={'Meta':'ads-meta','Organic Meta':'organic-meta'}.get(name)
+                    if stage:run_stage(runtime,stage,action)
+                    else:action()
                 except Exception as error:
                     # Do not expose API URLs, request headers or codes in logs.
                     failures.append(name)

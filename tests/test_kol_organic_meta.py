@@ -14,6 +14,66 @@ HEADERS = ['Creator', 'Organic Launch Date', 'Content Brief', 'Post Link', 'Ad C
 
 
 class OrganicTests(unittest.TestCase):
+    def test_paid_failure_keeps_runtime_pending(self):
+        from kol_meta_runtime import MetaRuntime
+        ad={'id':'1','effective_status':'ACTIVE','created_time':'2026-01-01T12:00:00+0000','creative':{'source_instagram_media_id':'123'}}
+        def pages(session,url,params):
+            if url.endswith('/ads'):return [ad]
+            raise RuntimeError('rejected')
+        with tempfile.TemporaryDirectory() as directory,patch('sync_creator_tracker.get_json',return_value={'timezone_name':'America/Chicago'}),patch('sync_creator_tracker.graph_pages',side_effect=pages):
+            runtime=MetaRuntime(directory,'test')
+            with runtime.stage('organic-meta'):
+                fetch_ad_interactions({'META_ACCESS_TOKEN':'test','META_AD_ACCOUNT_ID':'1','_KOL_META_RUNTIME':runtime},{'ABC':{'content_id':'123'}},Path(directory)/'cache.json')
+                runtime.complete('organic-meta')
+            self.assertIn('organic-meta',runtime.pending())
+
+    def test_active_paid_cache_expires_at_reporting_boundary(self):
+        ad={'id':'1','effective_status':'ACTIVE','created_time':'2026-01-01T12:00:00+0000','creative':{'source_instagram_media_id':'123'}}
+        calls=[]
+        def pages(session,url,params):
+            if url.endswith('/ads'):return [ad]
+            calls.append(url);return [{'publisher_platform':'instagram','actions':[{'action_type':'post','value':'8'}]}]
+        with tempfile.TemporaryDirectory() as directory,patch('sync_creator_tracker.get_json',return_value={'timezone_name':'America/Chicago'}),patch('sync_creator_tracker.graph_pages',side_effect=pages):
+            env={'META_ACCESS_TOKEN':'test','META_AD_ACCOUNT_ID':'1'};p=Path(directory)/'cache.json'
+            with patch('kol_meta_runtime.reporting_window',return_value='first'):fetch_ad_interactions(env,{'ABC':{'content_id':'123'}},p)
+            with patch('kol_meta_runtime.reporting_window',return_value='second'):fetch_ad_interactions(env,{'ABC':{'content_id':'123'}},p)
+            self.assertEqual(len(calls),2)
+    def test_pause_grace_ends_at_seven_days(self):
+        entry={'paused_since':'2026-10-01','fetched_on':'2026-10-07','value':12}
+        self.assertTrue(paid_cache_decision(entry,'PAUSED',date(2026,10,7))[0])
+        self.assertFalse(paid_cache_decision(entry,'PAUSED',date(2026,10,8))[0])
+        self.assertTrue(paid_cache_decision(entry,'PAUSED',date(2026,10,14))[0])
+
+    def test_active_ads_run_before_paused_and_partial_success_is_checkpointed(self):
+        ads=[{'id':aid,'effective_status':status,'created_time':'2026-01-01T12:00:00+0000',
+              'creative':{'source_instagram_media_id':'123'}} for aid,status in [('1','PAUSED'),('2','ACTIVE')]]
+        seen=[]
+        def pages(session,url,params):
+            if url.endswith('/ads'):return ads
+            aid=url.split('/')[-2];seen.append(aid)
+            if aid=='1':raise RuntimeError('temporary error')
+            return [{'publisher_platform':'instagram','actions':[{'action_type':'post','value':'8'}]}]
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'cache.json'
+            with patch('sync_creator_tracker.get_json',return_value={'timezone_name':'America/Chicago'}),patch('sync_creator_tracker.graph_pages',side_effect=pages):
+                _,paid=fetch_ad_interactions({'META_ACCESS_TOKEN':'test','META_AD_ACCOUNT_ID':'1'},{'ABC':{'content_id':'123'}},path)
+            self.assertEqual(seen,['2','1'])
+            self.assertEqual(json.loads(path.read_text())['ads']['2']['value'],8)
+            self.assertNotIn('123',paid)  # Never publish an incomplete sum.
+
+    def test_same_day_active_checkpoint_not_refetched_on_resume(self):
+        ads=[{'id':'2','effective_status':'ACTIVE','created_time':'2026-01-01T12:00:00+0000','creative':{'source_instagram_media_id':'123'}}]
+        seen=[]
+        def pages(session,url,params):
+            if url.endswith('/ads'):return ads
+            seen.append(url);return [{'publisher_platform':'instagram','actions':[{'action_type':'post','value':'8'}]}]
+        with tempfile.TemporaryDirectory() as directory,patch('sync_creator_tracker.get_json',return_value={'timezone_name':'America/Chicago'}),patch('sync_creator_tracker.graph_pages',side_effect=pages):
+            p=Path(directory)/'cache.json';env={'META_ACCESS_TOKEN':'test','META_AD_ACCOUNT_ID':'1'}
+            fetch_ad_interactions(env,{'ABC':{'content_id':'123'}},p)
+            _,paid=fetch_ad_interactions(env,{'ABC':{'content_id':'123'}},p)
+            self.assertEqual(len(seen),1)
+            self.assertEqual(paid['123']['value'],8)
+
     def test_media_identity_status_and_unique_code_without_tracker(self):
         values = self.values()
         values[2][4:6] = ['', '']

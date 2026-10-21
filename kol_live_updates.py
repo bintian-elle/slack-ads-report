@@ -215,12 +215,22 @@ def poll(env,output,apply):
         def invoke(jobs,kind=kind,writer=writer):
             out=output/kind;out.mkdir(exist_ok=True)
             keys=set().union(*(job_keys(kind,job,state.get('link_aliases')) for job in jobs))
-            return writer(env,out,apply,target_keys=keys,link_aliases=state.get('link_aliases'))
+            action=lambda:writer(env,out,apply,target_keys=keys,link_aliases=state.get('link_aliases'))
+            runtime=env.get('_KOL_META_RUNTIME')
+            if runtime and kind in ('organic-meta','ads-meta'):
+                from kol_meta_runtime import run_stage
+                return run_stage(runtime,kind,action)
+            return action()
         handlers[kind]=invoke
     def save():
         if apply:save_json(path,state)
+    def insert(kind,jobs):
+        runtime=env.get('_KOL_META_RUNTIME')
+        if runtime and kind in ('organic-meta','ads-meta'):
+            with runtime.stage(kind):return insert_jobs(env,kind,jobs,output,apply,state.get('link_aliases',{}))
+        return insert_jobs(env,kind,jobs,output,apply,state.get('link_aliases',{}))
     dispatch_jobs(state,handlers,
-        lambda kind,jobs:insert_jobs(env,kind,jobs,output,apply,state.get('link_aliases',{})),save,now,
+        insert,save,now,
         lambda kind,jobs,reason:write_failure(env,kind,jobs,reason,apply,state.get('link_aliases',{})))
     for job in state['jobs'].values():
         for raw,error in state.get('link_errors',{}).items():

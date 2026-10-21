@@ -236,6 +236,42 @@ Never substitute natural Views for public Views. I/CPE deliberately retain the a
 natural Interaction (four-part fallback only when complete) plus exact-source-media
 Instagram paid net likes, net comments and shares. Paid pause caching remains as
 implemented by `kol_organic_meta.py`; no public counters are added to Method A.
+
+### Shared KOL Meta budget and continuation
+
+The production `kol_tracker.py` CLI installs a process-local Graph GET guard for
+all KOL Meta paths, including inventory, discovery, Views and Ads Insights.
+Robot never installs/imports this guard and is not restarted by KOL deployment.
+Other hosts/apps sharing Meta credentials remain outside this guard.
+
+- Non-paused ads are queried before paused ads. The first seven days after the
+  first observed pause are refreshed daily; thereafter paused advertising
+  metrics refresh every seven days. Reactivation resets the pause observation.
+  Organic post Views/counters can still grow without ads and keep their daily
+  schedule; they are not frozen just because advertising is paused.
+- Successful Graph response pages are atomic private checkpoints in
+  `meta-request-progress.json`. Metric pages expire at the next Eastern 02:00
+  boundary; inventories expire after 15 minutes. Paid/advertising metric caches
+  also track the reporting window and pause state. A retry never publishes a
+  partial ad sum or substitutes stale missing data.
+- Each invocation sends at most 40 Meta network requests by default
+  (`KOL_META_REQUEST_BATCH_SIZE`, bounded to 1–100). Checkpoint hits do not consume
+  this budget. A batch limit queues the remainder for the five-minute poll.
+- App, ad-account and business-use-case usage headers share an 80% threshold.
+  HTTP 429 or Meta codes 4/17/613/80002 also trigger a persisted one-hour cooldown.
+  During cooldown no new KOL Graph requests are sent, even after process restart;
+  the next attempt checks usage again, not assumes recovery. The successful
+  response that reaches the threshold is retained.
+- Network/temporary HTTP failures are queued with 30-minute backoff. Stable
+  400/401/403/404 lookup responses are cached for six hours to avoid consuming
+  every continuation batch on the same inaccessible post. Missing/unsupported
+  identities are still reported, not manufactured into successful metrics.
+- The existing poll timer resumes only queued Meta stages, not the whole daily
+  task or TikTok/YouTube. Progress logs show network calls, checkpoint hits and
+  pending stages; private state records the last usage headers and stage.
+- Plan-only commands do not persist new continuation jobs or modify the quota
+  state. Native Sheets formatting/manual-field guards remain unchanged.
+
 Missing counters retain prior values and Q states
 the unavailable metric names, without basis labels; missing Saves is not zero. A known four-part I
 formula is frozen at its old result when totals are incomplete, avoiding a mixed

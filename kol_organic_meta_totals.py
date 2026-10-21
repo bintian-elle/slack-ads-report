@@ -125,6 +125,7 @@ class APIReadError(RuntimeError):
 
 
 def api_read(env, path, params=None):
+    from kol_meta_runtime import MetaDeferred
     """A sanitized GET; never include request URLs or Meta messages in logs."""
     base='https://graph.facebook.com/'+env.get('KOL_TRACKER_META_API_VERSION','v23.0')
     url=path if path.startswith('https://') else base+'/'+path
@@ -136,6 +137,10 @@ def api_read(env, path, params=None):
         if stop is not None and stop.is_set():raise APIReadError(env.get('_META_VIEWS_STOP_REASON','Meta rate limit; remaining Views deferred'))
         try:
             r=requests.get(url,params=params,headers={'Authorization':'Bearer '+env['META_ACCESS_TOKEN']},timeout=45)
+        except MetaDeferred as exc:
+            env['_META_VIEWS_STOP_REASON']=str(exc)
+            if stop is not None:stop.set()
+            raise APIReadError(str(exc)) from None
         except requests.RequestException:
             raise APIReadError('request failed') from None
         try:data=r.json()
@@ -184,7 +189,11 @@ def creator_media(env, username, wanted):
         if page==9:return found
         nxt=media.get('paging',{}).get('next')
         if not nxt or nxt in seen:return found
-        seen.add(nxt);data=api_read(env,nxt)
+        seen.add(nxt)
+        try:data=api_read(env,nxt)
+        except APIReadError:
+            if env.get('_META_VIEWS_STOP_EVENT') is not None and env['_META_VIEWS_STOP_EVENT'].is_set():return found
+            raise
         media=data.get('business_discovery',{}).get('media',data)
     return found
 
@@ -237,8 +246,9 @@ def fetch_totals(env, values, discovery=(), ads=(), identities=None):
                     content[key]=dict(item,_views_source='Business Discovery view_count');ids[key]=str(item['id']);errors.pop(key,None)
                 else:errors[key]='Business Discovery did not return view_count'
             else:errors[key]=error or 'Exact post not returned by Business Discovery'
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        for count,(creator,keys,found,error) in enumerate(pool.map(discovery_read,bycreator.items()),1):
+    ordered=sorted(bycreator.items(),key=lambda pair:all(str(wanted[key][5] if len(wanted[key])>5 else '').lower() in ('pause','paused') for key in pair[1]))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        for count,(creator,keys,found,error) in enumerate(pool.map(discovery_read,ordered),1):
             accept(keys,found,error)
             if count%10==0 or count==len(bycreator):print('Organic Meta independent Views: %d/%d Creators'%(count,len(bycreator)),flush=True)
     # Optional alias recovery only: a failed metadata GET cannot erase a successful Views response.

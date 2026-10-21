@@ -17,6 +17,29 @@ def sheet():
 
 
 class TotalMetricTests(unittest.TestCase):
+    def test_shared_guard_defer_preserves_completed_creator_views(self):
+        from kol_organic_meta_totals import fetch_totals
+        from kol_meta_runtime import MetaDeferred
+        values=sheet();other=list(values[2]);other[0]='other';other[3]='https://instagram.com/reel/DEF/';values.append(other)
+        from unittest.mock import Mock
+        def network(url,**kwargs):
+            if 'eva.hooft' in kwargs['params']['fields']:
+                r=Mock(ok=True,status_code=200,headers={});r.json.return_value={'business_discovery':{'media':{'data':[{'id':'1','permalink':'https://instagram.com/reel/ABC/','view_count':123}]}}};return r
+            raise MetaDeferred('Meta batch budget reached')
+        with patch('kol_organic_meta_totals.requests.get',side_effect=network):
+            content,_=fetch_totals({'META_ACCESS_TOKEN':'test'},values)
+        self.assertEqual(content['ABC']['view_count'],123)
+        self.assertIn('budget',content['DEF']['_error'])
+    def test_views_testing_creators_precede_paused_creators(self):
+        from kol_organic_meta_totals import fetch_totals
+        values=sheet();values[2][0]='paused_creator';values[2][5]='paused'
+        active=list(values[2]);active[0]='active_creator';active[3]='https://instagram.com/reel/DEF/';active[5]='testing';values.append(active)
+        seen=[]
+        def read(env,creator,keys):
+            seen.append(creator)
+            return {key:{'id':key,'permalink':'https://instagram.com/reel/'+key+'/','view_count':10} for key in keys}
+        with patch('kol_organic_meta_totals.creator_media',side_effect=read):fetch_totals({},values)
+        self.assertEqual(seen,['active_creator','paused_creator'])
     def test_views_api_usage_guard_retains_current_response_and_stops_following_calls(self):
         from kol_organic_meta_totals import api_read,APIReadError
         from threading import Event
