@@ -410,10 +410,11 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
     from tracker_failure_notes import plan_notes
     session, endpoint = sheet_session(env)
     prop, native, values = read_tab(session, endpoint, 'TikTok')
-    details = fetch_ad_details(env)
+    details = env['_KOL_TIKTOK_DETAILS'] if '_KOL_TIKTOK_DETAILS' in env else fetch_ad_details(env)
     from kol_targeting import row_keys,scope_values,resolve_values
     working=resolve_values(values,'ads-tiktok',link_aliases)
-    planned, skipped = tiktok_bindings(working, fetch_report(env), details)
+    records=env['_KOL_TIKTOK_REPORT'] if '_KOL_TIKTOK_REPORT' in env else fetch_report(env)
+    planned, skipped = tiktok_bindings(working, records, details)
     if target_keys is not None:
         selected={i for i,row in enumerate(working,1) if i>2 and matches_target('ads-tiktok',row,target_keys)}
         planned=[x for x in planned if x['row'] in selected]
@@ -428,8 +429,19 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
     cells = native['sheets'][0]['data'][0]['rowData']
     body, expected = [], json.loads(json.dumps(native))
     expected_cells = expected['sheets'][0]['data'][0]['rowData']
+    from kol_row_updates import automatic_status
+    detail_by_id={str(ad['ad_id']):ad for ad in details}
     for p in planned:
         changes = [(7+i, v) for i, v in enumerate(p['metrics']) if 7+i not in p['preserve']]
+        observed=[]
+        for aid in p['ad_ids']:
+            status=detail_by_id.get(str(aid),{}).get('operation_status')
+            observed.append({'effective_status':{'ENABLE':'ACTIVE','DISABLE':'PAUSED'}.get(status)})
+        raw_status=cells[p['row']-1].get('values',[])
+        status_target=raw_status[5] if len(raw_status)>5 else {}
+        current=values[p['row']-1][5] if len(values[p['row']-1])>5 else ''
+        status=automatic_status(current,observed,status_target)
+        if status is not None:changes.append((5,status))
         if p['new_binding']:
             changes.append((13, '\n'.join(p['ad_ids'])))
         for col, value in changes:
@@ -472,7 +484,7 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-views', 'organic-clean-notes', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'check'])
+    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-views', 'organic-clean-notes', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'check', 'hold-until-daily'])
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--creators', nargs='+', help='Organic Meta only: exact Creator names for a focused verification/update')
     args = parser.parse_args()
@@ -491,12 +503,21 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX)
         output = state_dir / 'runs' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
         output.mkdir(parents=True)
+        from kol_row_updates import metrics_allowed,hold_until_daily,run_kind
+        if args.task=='hold-until-daily':
+            if not args.apply:raise RuntimeError('Use --apply to set the KOL metric hold')
+            until=hold_until_daily(env)
+            print('KOL metrics resume at '+datetime.fromtimestamp(until,ZoneInfo('America/New_York')).isoformat(),flush=True)
+            return
         if args.task == 'check':
             session, endpoint = sheet_session(env)
             for title in ['Meta', 'TikTok']:
                 prop, _, _ = read_tab(session, endpoint, title)
                 print(title + ' native sheet accessible: ' + str(prop['sheetId']))
             print('Tracker configuration check passed; no writes'); return
+        if args.task not in ('poll','organic-clean-notes') and not metrics_allowed(env):
+            print('KOL metric hold active; scheduled updates resume at the next daily boundary',flush=True)
+            return
         from kol_meta_runtime import MetaRuntime,run_stage,resume_pending
         runtime=resources.enter_context(MetaRuntime(state_dir,env['META_ACCESS_TOKEN'],
             budget=int(env.get('KOL_META_REQUEST_BATCH_SIZE','40')),persist=args.apply))
@@ -512,18 +533,18 @@ def main():
             from kol_organic_youtube import poll as youtube_poll
             youtube_poll(env, output, args.apply)
         elif args.task == 'organic-youtube':
-            from kol_organic_youtube import run as youtube_daily
-            youtube_daily(env, output, args.apply)
+            run_stage(runtime,'organic-youtube',lambda:run_kind(env,output,args.apply,'organic-youtube'))
         elif args.task == 'organic-views':
-            from kol_organic_meta_totals import run_views
-            run_stage(runtime,'organic-views',lambda:run_views(env,output,args.apply))
+            run_stage(runtime,'organic-meta',lambda:run_kind(env,output,args.apply,'organic-meta'))
         elif args.task == 'organic-clean-notes':
             from kol_organic_meta_totals import cleanup_notes
             cleanup_notes(env,output,args.apply)
         elif args.task == 'organic':
-            run_stage(runtime,'organic-meta',lambda:organic_meta_daily(env, output, args.apply, creators=args.creators))
+            if args.creators:
+                run_stage(runtime,'organic-meta',lambda:organic_meta_daily(env, output, args.apply, creators=args.creators))
+            else:run_stage(runtime,'organic-meta',lambda:run_kind(env,output,args.apply,'organic-meta'))
         elif args.task == 'organic-tiktok':
-            organic_tiktok_daily(env, output, args.apply)
+            run_stage(runtime,'organic-tiktok',lambda:run_kind(env,output,args.apply,'organic-tiktok'))
         else:
             from kol_organic_youtube import run as youtube_daily
             failures = []
@@ -535,9 +556,10 @@ def main():
                                  [('Organic YouTube', lambda: youtube_daily(env, output, args.apply))]
                                  if env.get('KOL_ORGANIC_SHEETS_LINK') and env.get('YOUTUBE_API_KEY') else []):
                 try:
-                    stage={'Meta':'ads-meta','Organic Meta':'organic-meta'}.get(name)
-                    if stage:run_stage(runtime,stage,action)
-                    else:action()
+                    stage={'Meta':'ads-meta','TikTok':'ads-tiktok','Organic Meta':'organic-meta',
+                           'Organic TikTok':'organic-tiktok','Organic YouTube':'organic-youtube'}[name]
+                    task_output=output/stage;task_output.mkdir(exist_ok=True)
+                    run_stage(runtime,stage,lambda:run_kind(env,task_output,args.apply,stage))
                 except Exception as error:
                     # Do not expose API URLs, request headers or codes in logs.
                     failures.append(name)

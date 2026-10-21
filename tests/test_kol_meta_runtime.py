@@ -166,14 +166,14 @@ class MetaRuntimeTests(unittest.TestCase):
                 requests.get('https://graph.facebook.com/1/insights')
             self.assertEqual(calls,['https://graph.facebook.com/act_1/ads','https://graph.facebook.com/1/insights','https://graph.facebook.com/act_1/ads'])
 
-    def test_resume_invokes_only_due_meta_stages_and_clears_on_success(self):
+    def test_resume_invokes_only_due_kol_rows_and_clears_on_success(self):
         from kol_meta_runtime import resume_pending
         with tempfile.TemporaryDirectory() as directory:
             runtime=self.runtime(directory)
             runtime.state['pending']={'organic-views':{'retry_at':0},'organic-meta':{'retry_at':9999999999},'robot':{'retry_at':0}}
-            with patch('kol_organic_meta_totals.run_views',return_value=[]) as views,patch('kol_organic_meta_totals.run') as organic:
+            with patch('kol_row_updates.run_kind',return_value=set()) as rows:
                 resume_pending(runtime,{},Path(directory),True)
-            self.assertEqual(views.call_count,1)
-            self.assertEqual(organic.call_count,0)
+            self.assertEqual(rows.call_count,1)
+            self.assertEqual(rows.call_args.args[-1],'organic-meta')
             self.assertNotIn('organic-views',runtime.pending())
             self.assertIn('organic-meta',runtime.pending())

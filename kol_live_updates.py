@@ -137,36 +137,32 @@ def enqueue_jobs(state,events,now):
             elif not jobs[job_id].get('ad_code') and event.get('ad_code'):
                 jobs[job_id]['ad_code']=event['ad_code'];jobs[job_id]['retry_at']=now
 
-def dispatch_jobs(state,handlers,insert,save,now,on_failure=None):
+def dispatch_jobs(state,handlers,insert,save,now,on_failure=None,metric_not_before=0):
     save()  # Persist jobs before any insertion/metric side effects.
     jobs=state.setdefault('jobs',{});completed=state.setdefault('completed',{})
     for kind in ('organic-youtube','organic-tiktok','organic-meta','ads-meta','ads-tiktok'):
         pending={k:v for k,v in jobs.items() if v['kind']==kind and v.get('retry_at',0)<=now}
         if not pending:continue
-        reason='Metrics not available yet; existing values retained';row_errors={}
-        try:
-            insert(kind,list(pending.values()))
-            success=handlers[kind](list(pending.values())) or set()
-        except Exception as error:
-            success=getattr(error,'successful_keys',set())
-            reason='Immediate update failed ('+type(error).__name__+'); existing values retained'
-            # Isolate a rejected/protected row; a platform backoff must never
-            # trigger immediate per-row network retries.
-            if not hasattr(error,'successful_keys') and len(pending)>1:
-                for key,job in pending.items():
-                    try:
-                        insert(kind,[job]);success.update(handlers[kind]([job]) or set())
-                    except Exception as individual:
-                        success.update(getattr(individual,'successful_keys',set()))
-                        row_errors[key]='Immediate update failed ('+type(individual).__name__+'); existing values retained'
         failed=[]
         for key,job in pending.items():
+            reason='Metrics not available yet; existing values retained'
+            try:
+                insert(kind,[job])
+                if now<metric_not_before:
+                    job['retry_at']=metric_not_before
+                    job['reason']='Metrics deferred until scheduled daily update'
+                    save();continue
+                success=handlers[kind]([job]) or set()
+            except Exception as error:
+                success=getattr(error,'successful_keys',set())
+                reason='Immediate update failed ('+type(error).__name__+'); existing values retained'
             if matches_keys(job_keys(kind,job,state.get('link_aliases')),success):
                 completed[key]=now;jobs.pop(key,None)
             else:
                 job['attempts']=job.get('attempts',0)+1
                 job['retry_at']=now+(300 if job['attempts']<=6 else 3600)
-                job['reason']=row_errors.get(key,reason);failed.append(job)
+                job['reason']=reason;failed.append(job)
+            save()  # A later rejected row cannot replay verified predecessors.
         if failed and on_failure:
             try:on_failure(kind,failed,reason)
             except Exception:print('Immediate '+kind+' reason target unavailable; queued for retry',flush=True)
@@ -215,7 +211,8 @@ def poll(env,output,apply):
         def invoke(jobs,kind=kind,writer=writer):
             out=output/kind;out.mkdir(exist_ok=True)
             keys=set().union(*(job_keys(kind,job,state.get('link_aliases')) for job in jobs))
-            action=lambda:writer(env,out,apply,target_keys=keys,link_aliases=state.get('link_aliases'))
+            from kol_row_updates import run_rows
+            action=lambda:run_rows(env,out,apply,kind,writer,target_keys=keys,link_aliases=state.get('link_aliases'))
             runtime=env.get('_KOL_META_RUNTIME')
             if runtime and kind in ('organic-meta','ads-meta'):
                 from kol_meta_runtime import run_stage
@@ -229,9 +226,13 @@ def poll(env,output,apply):
         if runtime and kind in ('organic-meta','ads-meta'):
             with runtime.stage(kind):return insert_jobs(env,kind,jobs,output,apply,state.get('link_aliases',{}))
         return insert_jobs(env,kind,jobs,output,apply,state.get('link_aliases',{}))
+    from kol_row_updates import metrics_allowed,root_path
+    control=root_path(env)/'metric-schedule-control.json'
+    not_before=0 if metrics_allowed(env,now) else json.loads(control.read_text())['not_before']
     dispatch_jobs(state,handlers,
         insert,save,now,
-        lambda kind,jobs,reason:write_failure(env,kind,jobs,reason,apply,state.get('link_aliases',{})))
+        lambda kind,jobs,reason:write_failure(env,kind,jobs,reason,apply,state.get('link_aliases',{})),
+        metric_not_before=not_before)
     for job in state['jobs'].values():
         for raw,error in state.get('link_errors',{}).items():
             if job['post_link']==raw:job['retry_at']=max(job['retry_at'],error['retry_at'])

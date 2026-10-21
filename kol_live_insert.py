@@ -22,6 +22,8 @@ def insert_jobs(env,kind,jobs,output,apply,aliases):
     from kol_organic_discovery import insert_additions
     from sync_creator_tracker import post_key as ig_post
     from add_tiktok_tracker_rows import post_key as tt_post
+    from kol_row_updates import metrics_allowed
+    enrich=metrics_allowed(env)
     session,endpoint,prop,native,values=open_tab(env,kind)
     if kind.startswith('ads-'):
         for job in jobs:
@@ -50,7 +52,7 @@ def insert_jobs(env,kind,jobs,output,apply,aliases):
             items.append(dict(job,post_link=link,post_key=key,announcement_ts=job['ts']))
         items,issues=dedup_new(platform,values,items)
         info=ads=None
-        if platform=='Meta' and items:
+        if platform=='Meta' and items and enrich:
             try:info,ads=meta_inventory(env)
             except Exception:pass  # Identity/date first; metric stage records failure.
         proposed=[new_row(platform,item,info,ads) for item in items]
@@ -67,7 +69,7 @@ def insert_jobs(env,kind,jobs,output,apply,aliases):
         from kol_organic_meta_totals import fetch_totals,verified_media
         from kol_organic_meta import post_key
         proposed=[[],values[1]]+[[x['creator'],'','',x['post_link'],x.get('ad_code','')] for x in additions]
-        if additions:
+        if additions and enrich:
             content,_=fetch_totals(env,proposed)
             for item in additions:
                 key=post_key(item['post_link']);media=content.get(key,{})
@@ -78,7 +80,7 @@ def insert_jobs(env,kind,jobs,output,apply,aliases):
                 else:item['note']='Total metrics unavailable: exact media unresolved; launch date from Slack; KOL fee requires manual entry'
         insert_additions(env,output,apply,prop,native,values,additions)
     else:
-        if kind=='organic-youtube' and additions:
+        if kind=='organic-youtube' and additions and enrich:
             from kol_organic_youtube import fetch_videos,video_id
             try:api=fetch_videos(env,[video_id(x['post_link']) for x in additions if video_id(x['post_link'])])
             except Exception:api={}

@@ -298,7 +298,7 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
             for col,val in changes.items():add(row,col,val)
             if changes:
                 success+=1
-                if 4 in changes:completed.update(row_keys('organic-youtube',v))
+                if all(col in changes for col in (4,6,7)):completed.update(row_keys('organic-youtube',v))
         except RuntimeError:
             reason='YouTube API metrics target protected; existing metrics retained'
         old=str(v[note_col]) if len(v)>note_col else ''

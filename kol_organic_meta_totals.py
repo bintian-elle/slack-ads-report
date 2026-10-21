@@ -473,14 +473,22 @@ def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
     if creators:
         selected=[row if i<2 or (row and row[0] in creators) else [] for i,row in enumerate(selected)]
     try:
-        with runtime.lane('metadata',2) if runtime else nullcontext():
+        with runtime.lane('metadata',2) if runtime and not env.get('_KOL_ROW_MODE') else nullcontext():
             ads=ad_inventory(env)
     except (RuntimeError,requests.RequestException):
         ads=[];print('Organic Meta ad statuses unavailable; existing statuses retained',flush=True)
     state_path=Path(env.get('KOL_TRACKER_STATE_DIR',str(BASE/'data/processed/kol_tracker_runtime')))/'organic-meta-identities.json'
     try:registry=json.loads(state_path.read_text()).get('posts',{})
     except (ValueError,OSError):registry={}
-    content,registry,natural,interaction=fetch_metric_lanes(env,selected,discovery,ads,registry,output,state_path)
+    if env.get('_KOL_ROW_MODE'):
+        # A row's engagement, bound ads, Views and derived values are fetched
+        # together; the transport budget checkpoints an interrupted partial row.
+        natural={}
+        interaction=method_a_values(env,selected,output,state_path.parent/'organic-paid-cache.json',natural_out=natural)
+        content,registry=fetch_totals(env,selected,discovery,ads,registry)
+        save_json(output/'Organic-Meta-Totals-source.json',content)
+    else:
+        content,registry,natural,interaction=fetch_metric_lanes(env,selected,discovery,ads,registry,output,state_path)
     planned=metric_plan(selected,content,interaction,natural_content=natural)
     identity_content={key:{'content_id':mid} for key,mid in registry.items()}
     identity_content.update({key:{'content_id':x['id']} for key,x in content.items() if verified_media(x,key)})

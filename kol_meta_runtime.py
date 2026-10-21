@@ -216,10 +216,13 @@ def run_stage(runtime,name,action,resume=False):
 
 
 def resume_pending(runtime,env,output,apply):
-    """Only known Meta stages; never rerun TikTok, YouTube or Robot."""
-    from update_meta_tracker import run as ads
-    from kol_organic_meta_totals import run as organic,run_views
-    actions={'ads-meta':ads,'organic-meta':organic,'organic-views':run_views}
+    """Resume only unfinished KOL rows, never Robot or the whole daily task."""
+    from kol_row_updates import metrics_allowed,run_kind
+    if not metrics_allowed(env,now=runtime.now()):return
+    actions={name:(lambda env,out,apply,name=name:run_kind(env,out,apply,name))
+             for name in ('ads-meta','organic-meta','ads-tiktok','organic-tiktok','organic-youtube')}
+    # Legacy Views-only checkpoints migrate to the unified row queue.
+    actions['organic-views']=lambda env,out,apply:run_kind(env,out,apply,'organic-meta')
     for name in runtime.pending(due=True):
         if name not in actions:continue
         target=output/('resume-'+name);target.mkdir(exist_ok=True)

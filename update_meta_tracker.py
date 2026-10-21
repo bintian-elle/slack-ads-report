@@ -67,6 +67,11 @@ def new_row_status(ads):
     return None
 
 
+def metric_cutoff(env,targeted,today):
+    live=targeted and (not env.get('_KOL_ROW_MODE') or env.get('_KOL_LIVE_METRICS'))
+    return (today if live else today-timedelta(days=1)).isoformat()
+
+
 def write_range(sheet_id, row, start, values):
     return {'updateCells': {'range': {'sheetId': sheet_id, 'startRowIndex': row-1,
         'endRowIndex': row, 'startColumnIndex': start, 'endColumnIndex': start+len(values)},
@@ -171,7 +176,7 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
     base='https://graph.facebook.com/'+env.get('KOL_TRACKER_META_API_VERSION','v23.0')
     account='act_'+env['META_AD_ACCOUNT_ID'].removeprefix('act_')
     info=get_json(s,base+'/'+account,{'fields':'id,name,currency,timezone_name'})
-    end=(datetime.now(ZoneInfo(info['timezone_name'])).date()-timedelta(days=1)).isoformat()
+    end=metric_cutoff(env,target_keys is not None,datetime.now(ZoneInfo(info['timezone_name'])).date())
     ads=graph_pages(s,base+'/'+account+'/ads',{'fields':'id,name,created_time,effective_status,campaign{id,name},adset{id,name},creative{id,branded_content}','limit':100})
     matches, skips, conflicts=exact_mapping(rows,ads)
     from kol_targeting import row_keys,scope_values
@@ -192,8 +197,6 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
             date=min(datetime.strptime(a['created_time'],'%Y-%m-%dT%H:%M:%S%z').astimezone(ZoneInfo(info['timezone_name'])).date() for a in matched)
             row[2]=(date-datetime(1899,12,30).date()).days
     print('Exact identity mapping complete:',len(matches),'rows; fetching cumulative Insights',flush=True)
-    if target_keys is not None:
-        end=datetime.now(ZoneInfo(info['timezone_name'])).date().isoformat()
     bound={aid for ids in matches.values() for aid in ids}
     cache_root=Path(env.get('KOL_TRACKER_STATE_DIR',str(BASE/'data/processed/kol_tracker_runtime')))
     insights,complete_ads=resumable_insights(s,base,account,ads,bound,env.get('KOL_TRACKER_START_DATE','2025-01-01'),end,
@@ -201,8 +204,18 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
     byad=defaultdict(list)
     for r in insights: byad[r['ad_id']].append(r)
     requests_body=[]; updated=[]
-    location_changes={}
+    location_changes={};status_changes={}
+    from kol_row_updates import automatic_status
     for number,row in rows:
+        raw_cells=block[number-1].get('values',[])
+        target=raw_cells[8] if len(raw_cells)>8 else {}
+        status=automatic_status(row[8],[byid[aid] for aid in matches.get(number,[])],target)
+        if status is not None:
+            try:verify_literal_target(target,status)
+            except RuntimeError:pass
+            else:
+                status_changes[number]=status
+                requests_body.append(write_range(sheet_id,number,8,[status]))
         if number!=new_number and number in locations and row[0]!=locations[number]:
             if block[number-1].get('values',[{}])[0].get('dataValidation'): raise RuntimeError('Constrained Location cell')
             requests_body.append(write_range(sheet_id,number,0,[locations[number]]))
@@ -253,7 +266,8 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
     now=datetime.now(ZoneInfo('America/Chicago'))
     header=re.sub(r'\[[^\]]*update[^\]]*\]', '['+now.strftime('%Y-%m-%d')+' update]',raw[0][9],flags=re.I)
     if header==raw[0][9] and 'update' not in header.lower(): header+='\n['+now.strftime('%Y-%m-%d')+' update]'
-    requests_body.append(write_range(sheet_id,1,9,[header]))
+    if updated:requests_body.append(write_range(sheet_id,1,9,[header]))
+    else:header=raw[0][9]
     plan={'fetched_at':now.isoformat(),'cutoff':end,'account':info,'new_row':new_number,'updated_rows':updated,'location_changes':location_changes,'skipped':skips,'note_updates':notes,'shared_ads':conflicts,'j1':header,'requests':requests_body}
     stamp=now.strftime('%Y%m%dT%H%M%S')
     (output/(stamp+'-before.json')).write_text(json.dumps({'sheet':before,'grid':grid},ensure_ascii=False,indent=2))
@@ -274,7 +288,9 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
             if current[:9]!=row[:9]: raise RuntimeError('New row identity/Status verification failed')
         if number<=last:
             current=after['values'][number-1]+['']*22
-            if current[1:9]!=row[1:9] or current[0]!=location_changes.get(number,row[0]): raise RuntimeError('Manual fields verification failed')
+            expected_identity=list(row[1:9])
+            expected_identity[7]=status_changes.get(number,row[8])
+            if current[1:9]!=expected_identity or current[0]!=location_changes.get(number,row[0]): raise RuntimeError('Manual fields verification failed')
             for col in [19,20,21]:
                 if any(item['row']==number and col in item['changes'] for item in notes): continue
                 old=block[number-1].get('values',[])

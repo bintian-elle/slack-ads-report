@@ -119,7 +119,9 @@ def fetch_ad_interactions(env, content, cache_path=None):
     interval = max(1, int(env.get('KOL_ORGANIC_PAUSED_REFRESH_DAYS', '7')))
     by_id = {ad['id']: ad for ad in ads}
     # Disappeared/unbound ads must establish a new pause observation if they return.
-    cached = {aid: entry for aid, entry in cached.items() if aid in ids}
+    # A row-scoped request must not delete checkpoints for all other posts.
+    if not env.get('_KOL_ROW_MODE'):
+        cached = {aid: entry for aid, entry in cached.items() if aid in ids}
     totals, refresh_ids, pause_dates = {}, [], {}
     ids.sort(key=lambda aid:(by_id[aid].get('effective_status') in PAUSED_STATUSES,aid))
     for aid in ids:
