@@ -269,20 +269,21 @@ def write_updates(session, endpoint, prop, native, values, planned, other, outpu
     print('Organic Meta total counters and notes verified: %d/%d rows'%(successful,len(planned)),flush=True)
 
 
-def run(env, output, apply, creators=None):
+def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
     from kol_tracker import BASE, sheet_session,read_tab,save_json
     from kol_organic_discovery import run as discover
     from kol_organic_meta import code_plan,media_identity_plan,status_plan
     discovery=[]
-    if not creators:
+    if not creators and target_keys is None:
         try:discovery=discover(env,output,apply) or []
         except (RuntimeError,requests.RequestException):
             print('Organic Meta API discovery unavailable; existing rows still queried',flush=True)
     session,endpoint=sheet_session(dict(env,KOL_TRACKER_GOOGLE_SHEETS_LINK=env['KOL_ORGANIC_SHEETS_LINK']))
     prop,native,values=read_tab(session,endpoint,'Meta-IG');validate_schema(values,{})
-    selected=values
+    from kol_targeting import scope_values,resolve_values,row_keys
+    selected=scope_values(resolve_values(values,'organic-meta',link_aliases),'organic-meta',target_keys)
     if creators:
-        selected=[row if i<2 or (row and row[0] in creators) else [] for i,row in enumerate(values)]
+        selected=[row if i<2 or (row and row[0] in creators) else [] for i,row in enumerate(selected)]
     try:ads=ad_inventory(env)
     except (RuntimeError,requests.RequestException):
         ads=[];print('Organic Meta ad statuses unavailable; existing statuses retained',flush=True)
@@ -293,11 +294,21 @@ def run(env, output, apply, creators=None):
     save_json(output/'Organic-Meta-Totals-source.json',content)
     interaction=method_a_values(env,selected,output,state_path.parent/'organic-paid-cache.json')
     planned=metric_plan(selected,content,interaction)
-    identity_content={key:{'content_id':x['id']} for key,x in content.items() if verified_media(x,key)}
-    resolved,codes,issues=code_plan(selected,[],ads)
+    identity_content={key:{'content_id':mid} for key,mid in registry.items()}
+    identity_content.update({key:{'content_id':x['id']} for key,x in content.items() if verified_media(x,key)})
+    for row in values[2:]:
+        if len(row)>17 and post_key(row[3]) and re.fullmatch(r'\d{10,}',str(row[17])):
+            identity_content.setdefault(post_key(row[3]),{'content_id':str(row[17])})
+    # Check claims across every row before selecting writes for pending posts.
+    resolved,codes,issues=code_plan(values,[],ads)
     resolved,matches,media_codes,media_issues=media_identity_plan(resolved,ads,identity_content,{x['row'] for x in issues})
+    selected_rows={x['row'] for x in planned}
+    codes=[x for x in codes if x['row'] in selected_rows]
+    media_codes=[x for x in media_codes if x['row'] in selected_rows]
     statuses=status_plan(resolved,ads,native['sheets'][0]['data'][0]['rowData'],matches)
+    statuses=[x for x in statuses if x['row'] in selected_rows]
     print('Organic Meta totals planned: %d rows; %d status changes'%(len(planned),len(statuses)),flush=True)
     write_updates(session,endpoint,prop,native,values,planned,codes+media_codes+statuses,output,apply)
     if apply:save_json(state_path,{'posts':registry})
-    return planned
+    return set().union(*(row_keys('organic-meta',values[x['row']-1],link_aliases)
+                         for x in planned if 7 in x['changes'] and 'target protected' not in x['reason']))

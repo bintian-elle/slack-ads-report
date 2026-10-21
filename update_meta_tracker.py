@@ -87,7 +87,7 @@ def main():
         run(env, output, args.apply)
 
 
-def run(env, output, apply):
+def run(env, output, apply, target_keys=None, link_aliases=None):
     from tracker_failure_notes import plan_notes
     from kol_tracker import verify_literal_target
     before = read_sheet(env, all_columns=True)
@@ -126,6 +126,12 @@ def run(env, output, apply):
     end=(datetime.now(ZoneInfo(info['timezone_name'])).date()-timedelta(days=1)).isoformat()
     ads=graph_pages(s,base+'/'+account+'/ads',{'fields':'id,name,created_time,effective_status,campaign{id,name},adset{id,name},creative{id,branded_content}','limit':100})
     matches, skips, conflicts=exact_mapping(rows,ads)
+    from kol_targeting import row_keys,scope_values
+    if target_keys is not None:
+        selected={n for n,row in rows if row_keys('ads-meta',row,link_aliases)&set(target_keys)}
+        rows=[(n,row) for n,row in rows if n in selected]
+        matches={n:ids for n,ids in matches.items() if n in selected}
+        skips=[item for item in skips if item['row'] in selected]
     byid={a['id']:a for a in ads}
     locations={}
     for number,row in rows:
@@ -138,7 +144,16 @@ def run(env, output, apply):
             date=min(datetime.strptime(a['created_time'],'%Y-%m-%dT%H:%M:%S%z').astimezone(ZoneInfo(info['timezone_name'])).date() for a in matched)
             row[2]=(date-datetime(1899,12,30).date()).days
     print('Exact identity mapping complete:',len(matches),'rows; fetching cumulative Insights',flush=True)
-    insights=fetch_insights(s,base,account,env.get('KOL_TRACKER_START_DATE','2025-01-01'),end)
+    if target_keys is None:
+        insights=fetch_insights(s,base,account,env.get('KOL_TRACKER_START_DATE','2025-01-01'),end)
+    else:
+        end=datetime.now(ZoneInfo(info['timezone_name'])).date().isoformat()
+        bound=sorted({aid for ids in matches.values() for aid in ids})
+        insights=graph_pages(s,base+'/'+account+'/insights',{'level':'ad',
+            'fields':'ad_id,ad_name,spend,impressions,clicks,inline_link_clicks,actions,action_values,date_start,date_stop',
+            'time_range':json.dumps({'since':env.get('KOL_TRACKER_START_DATE','2025-01-01'),'until':end}),
+            'filtering':json.dumps([{'field':'ad.id','operator':'IN','value':bound}]),
+            'use_unified_attribution_setting':'true','limit':100}) if bound else []
     byad=defaultdict(list)
     for r in insights: byad[r['ad_id']].append(r)
     requests_body=[]; updated=[]
@@ -182,7 +197,7 @@ def run(env, output, apply):
         updated.append({'row':number,'creator':row[1],'ad_ids':matches[number],'metrics':totals})
     partial = [{'row':item['row'],'reason':'Metric unavailable: '+', '.join(unavailable_metrics(item['metrics']))}
         for item in updated if unavailable_metrics(item['metrics'])]
-    notes = plan_notes(raw,{item['row'] for item in updated},skips+partial,1,3)
+    notes = plan_notes(scope_values(raw,'ads-meta',target_keys,link_aliases),{item['row'] for item in updated},skips+partial,1,3)
     for item in notes:
         for col,value in item['changes'].items():
             target = block[item['row']-1].get('values',[])
@@ -198,7 +213,7 @@ def run(env, output, apply):
     (output/(stamp+'-plan.json')).write_text(json.dumps(plan,ensure_ascii=False,indent=2))
     print(json.dumps({k:plan[k] for k in ['cutoff','new_row','skipped','shared_ads','j1']},ensure_ascii=False),flush=True)
     print('Planned metric rows:',len(updated),flush=True)
-    if not apply: return
+    if not apply: return set().union(*(row_keys('ads-meta',raw[item['row']-1],link_aliases) for item in updated))
     if read_sheet(env,all_columns=True)['values'] != raw: raise RuntimeError('Sheet changed during fetch; no write performed')
     response=gs.post(endpoint+':batchUpdate',json={'requests':requests_body},timeout=90)
     if not response.ok: raise RuntimeError('Sheets batch rejected: '+response.text)
@@ -243,6 +258,7 @@ def run(env, output, apply):
         for col,value in item['changes'].items():
             row=after['values'][item['row']-1]
             if (row[col] if col<len(row) else '')!=value: raise RuntimeError('Failure reason verification failed')
+    return set().union(*(row_keys('ads-meta',raw[item['row']-1],link_aliases) for item in updated))
     (output/(stamp+'-after.json')).write_text(json.dumps(after,ensure_ascii=False,indent=2))
     print('APPLIED AND VERIFIED',len(updated),'metric rows; new row',new_number,flush=True)
 

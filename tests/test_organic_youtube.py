@@ -65,3 +65,17 @@ class YouTubeTests(unittest.TestCase):
         with patch('kol_organic_youtube.requests.get',return_value=Mock(ok=False,status_code=403)):
             with self.assertRaisesRegex(RuntimeError,'^YouTube API HTTP 403$'):
                 fetch_videos({'YOUTUBE_API_KEY':'private'},['ETVZaHw6gpc'])
+
+    def test_targeted_only_one_post_from_repeated_creator(self):
+        from kol_organic_youtube import run
+        headers=['Creator','Organic Launch Date','Post Link','KOL Fee','Views','Interaction','Likes','Comments','Saves','Shares','CPM','CPE','Note','Reason for data update failure']
+        rows=[headers,['Eva','','https://youtu.be/ETVZaHw6gpc',100],['Eva','','https://youtu.be/m3voSsAfZQw',100]]
+        native={'sheets':[{'data':[{'rowData':[{'values':[{} for _ in headers]} for _ in rows]}]}]}
+        with patch('kol_tracker.sheet_session',return_value=(Mock(),'endpoint')), \
+             patch('kol_tracker.read_tab',return_value=({'sheetId':1},native,rows)), \
+             patch('kol_organic_youtube.fetch_videos',return_value={'m3voSsAfZQw':{'statistics':{'viewCount':'20','likeCount':'4','commentCount':'2'}}}) as fetch, \
+             patch('kol_tracker.save_json') as save:
+            completed=run({'KOL_ORGANIC_SHEETS_LINK':'link'},Path('/tmp'),False,target_keys={'yt:m3voSsAfZQw'})
+        self.assertEqual(fetch.call_args.args[1],['m3voSsAfZQw'])
+        self.assertEqual(completed,{'yt:m3voSsAfZQw'})
+        self.assertNotIn(2,{x['row'] for x in save.call_args.args[1]['writes']})

@@ -84,7 +84,7 @@ def backoff_until(now, retry_after):
     return max(until, requested).isoformat()
 
 
-def run(env, output, apply):
+def run(env, output, apply, target_keys=None, link_aliases=None):
     from kol_tracker import BASE, save_json, sheet_session, read_tab, verify_literal_target
     from update_meta_tracker import write_range
     scoped = dict(env, KOL_TRACKER_GOOGLE_SHEETS_LINK=env['KOL_ORGANIC_SHEETS_LINK'])
@@ -95,6 +95,8 @@ def run(env, output, apply):
                 'Interaction', 'Likes', 'Comments', 'Saves', 'Shares', 'CPM', 'CPE']
     if headers[:12] != expected:
         raise RuntimeError('Organic TikTok schema changed')
+    from kol_targeting import scope_values,resolve_values,row_keys
+    values=scope_values(resolve_values(values,'organic-tiktok',link_aliases),'organic-tiktok',target_keys)
     path = Path(env.get('KOL_TRACKER_STATE_DIR', str(BASE / 'data/processed/kol_tracker_runtime'))) / 'organic-tiktok-state.json'
     state = json.loads(path.read_text()) if path.exists() else {'videos': {}}
     # Malformed state must fail closed, not cause duplicate daily requests.
@@ -225,3 +227,4 @@ def run(env, output, apply):
     print('Organic TikTok metrics and Views update date verified',flush=True)
     if blocked and not backoff_active:
         raise RuntimeError('TikTok access restricted; successful rows/reasons written, backoff saved')
+    return set().union(*(row_keys('organic-tiktok',values[x['row']-1]) for x in planned))

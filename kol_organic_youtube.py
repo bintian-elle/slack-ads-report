@@ -243,18 +243,20 @@ def poll(env, output, apply):
         save_json(path,{'cursor':now,'channel':channel,'threads':next_roots,'candidates':discovered})
 
 
-def run(env, output, apply):
+def run(env, output, apply, target_keys=None, link_aliases=None):
     from kol_tracker import sheet_session, read_tab, verify_literal_target, save_json
     from update_meta_tracker import write_range
     session,endpoint=sheet_session(dict(env,KOL_TRACKER_GOOGLE_SHEETS_LINK=env['KOL_ORGANIC_SHEETS_LINK']))
     prop,native,values=read_tab(session,endpoint,'YTB',False);note_col=schema(values)
+    from kol_targeting import scope_values,resolve_values,row_keys
+    values=scope_values(resolve_values(values,'organic-youtube',link_aliases),'organic-youtube',target_keys)
     data_rows=[(i,v) for i,v in enumerate(values[1:],2) if v and v[0] and str(v[0]).strip().lower()!='summary']
     try:
         api=fetch_videos(env,[video_id(str(v[2])) for _,v in data_rows if len(v)>2 and video_id(str(v[2]))])
         error=''
     except RuntimeError as exc:
         api={};error=str(exc)
-    cells=native['sheets'][0]['data'][0]['rowData'];body=[];expected={};success=0;issues=[]
+    cells=native['sheets'][0]['data'][0]['rowData'];body=[];expected={};success=0;issues=[];completed=set()
     def add(row,col,val):
         vs=cells[row-1].get('values',[]);target=vs[col] if len(vs)>col else {}
         if col in (5,10,11) and 'formulaValue' in target.get('userEnteredValue',{}):
@@ -291,7 +293,9 @@ def run(env, output, apply):
                 if col in (5,10,11) and 'formulaValue' in target.get('userEnteredValue',{}):continue
                 verify_literal_target(target,val)
             for col,val in changes.items():add(row,col,val)
-            if changes:success+=1
+            if changes:
+                success+=1
+                if 4 in changes:completed.update(row_keys('organic-youtube',v))
         except RuntimeError:
             reason='YouTube API metrics target protected; existing metrics retained'
         old=str(v[note_col]) if len(v)>note_col else ''
@@ -304,3 +308,4 @@ def run(env, output, apply):
     if apply:commit(session,endpoint,prop,native,body,expected,output,'Organic-YTB-metrics')
     print('Organic YTB: %d rows%s'%(success,' verified' if apply else ' planned'),flush=True)
     if error:raise RuntimeError(error)
+    return completed

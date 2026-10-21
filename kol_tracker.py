@@ -403,15 +403,21 @@ def tiktok_bindings(values, ads, details=None):
     return accepted, skipped
 
 
-def tiktok_daily(env, output, apply):
+def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
     from tracker_failure_notes import plan_notes
     session, endpoint = sheet_session(env)
     prop, native, values = read_tab(session, endpoint, 'TikTok')
     details = fetch_ad_details(env)
-    planned, skipped = tiktok_bindings(values, fetch_report(env), details)
+    from kol_targeting import row_keys,scope_values,resolve_values
+    working=resolve_values(values,'ads-tiktok',link_aliases)
+    planned, skipped = tiktok_bindings(working, fetch_report(env), details)
+    if target_keys is not None:
+        selected={i for i,row in enumerate(working,1) if i>2 and row_keys('ads-tiktok',row)&set(target_keys)}
+        planned=[x for x in planned if x['row'] in selected]
+        skipped=[x for x in skipped if x['row'] in selected]
     partial = [{'row':item['row'],'reason':'ROAS and Reach retained: multiple ads cannot be safely aggregated'}
                for item in planned if item['preserve']]
-    notes = plan_notes(values,{item['row'] for item in planned},skipped+partial,0,3)
+    notes = plan_notes(scope_values(working,'ads-tiktok',target_keys),{item['row'] for item in planned},skipped+partial,0,3)
     save_json(output / 'TikTok-daily-plan.json', {'planned': planned, 'skipped': skipped, 'note_updates':notes, 'window': 'API lifetime through request time'})
     print('TikTok metrics planned: %d; skipped: %d' % (len(planned), len(skipped)), flush=True)
     if not apply or not (planned or notes):
@@ -458,6 +464,7 @@ def tiktok_daily(env, output, apply):
     if expected != after:
         raise RuntimeError('Daily native readback failed; inspect backup')
     print('TikTok daily metrics and bindings verified', flush=True)
+    return set().union(*(row_keys('ads-tiktok',working[x['row']-1]) for x in planned))
 
 
 def main():
