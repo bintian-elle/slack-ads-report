@@ -168,6 +168,10 @@ class MetaRuntime:
 
 def run_stage(runtime,name,action):
     with runtime.stage(name):
+        # Persist before side effects: SIGTERM/power loss cannot silently lose
+        # a stage that has already consumed quota and saved response pages.
+        runtime.state['pending'][name]={'retry_at':runtime.now()+300,'reason':'Meta stage in progress; resume after interruption'}
+        runtime.save()
         try:result=action()
         except (RuntimeError,requests.RequestException):
             if name not in runtime.deferred:runtime.defer('Meta stage incomplete; queued for retry',1800)

@@ -17,6 +17,14 @@ def response(data, status=200, usage=None):
 
 
 class MetaRuntimeTests(unittest.TestCase):
+    def test_interruption_leaves_inflight_stage_for_poll_resume(self):
+        from kol_meta_runtime import run_stage
+        def interrupted():raise KeyboardInterrupt()
+        with tempfile.TemporaryDirectory() as directory:
+            runtime=self.runtime(directory)
+            with self.assertRaises(KeyboardInterrupt):run_stage(runtime,'organic-meta',interrupted)
+            restarted=self.runtime(directory,now=lambda:1792580400)
+            self.assertIn('organic-meta',restarted.pending(due=True))
     def test_plan_only_does_not_create_persistent_retry_work(self):
         from kol_meta_runtime import MetaDeferred
         with tempfile.TemporaryDirectory() as directory,patch('requests.sessions.Session.request',return_value=response({'error':{'code':4}},403)):
