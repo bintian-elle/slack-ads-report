@@ -17,6 +17,35 @@ def response(data, status=200, usage=None):
 
 
 class MetaRuntimeTests(unittest.TestCase):
+    def test_cooldown_only_invocation_does_not_erase_engagement_priority(self):
+        from kol_meta_runtime import MetaDeferred
+        with tempfile.TemporaryDirectory() as directory,patch('requests.sessions.Session.request',return_value=response({'error':{'code':4}},403)):
+            with self.runtime(directory) as runtime,runtime.stage('organic-meta'),runtime.lane('views',1):
+                with self.assertRaises(MetaDeferred):requests.get('https://graph.facebook.com/views')
+            with self.runtime(directory) as runtime,runtime.stage('organic-meta'):
+                for lane in runtime.metric_order():
+                    with runtime.lane(lane,1):
+                        with self.assertRaises(MetaDeferred):requests.get('https://graph.facebook.com/'+lane)
+                self.assertEqual(runtime.sent,0)
+            self.assertEqual(self.runtime(directory,now=lambda:1792584000).metric_order(),['engagement','views'])
+    def test_lane_budget_yields_to_other_metrics_without_global_cooldown(self):
+        from kol_meta_runtime import MetaDeferred
+        with tempfile.TemporaryDirectory() as directory,patch('requests.sessions.Session.request',return_value=response({'id':'ok'})) as network:
+            with self.runtime(directory) as runtime,runtime.stage('organic-meta'):
+                with runtime.lane('views',1):
+                    requests.get('https://graph.facebook.com/view1')
+                    with self.assertRaises(MetaDeferred):requests.get('https://graph.facebook.com/view2')
+                with runtime.lane('engagement',1):requests.get('https://graph.facebook.com/likes')
+                self.assertNotIn('blocked_until',runtime.state)
+            self.assertEqual(network.call_count,2)
+
+    def test_rate_limit_in_views_gives_engagement_first_turn_after_restart(self):
+        from kol_meta_runtime import MetaDeferred
+        with tempfile.TemporaryDirectory() as directory,patch('requests.sessions.Session.request',return_value=response({'error':{'code':4}},403)):
+            with self.runtime(directory) as runtime,runtime.stage('organic-meta'),runtime.lane('views',5):
+                with self.assertRaises(MetaDeferred):requests.get('https://graph.facebook.com/views')
+            restarted=self.runtime(directory,now=lambda:1792584000)
+            self.assertEqual(restarted.metric_order(),['engagement','views'])
     def test_cooldown_resume_reuses_inventory_snapshot_without_restarting_pages(self):
         calls=[]
         def network(session,method,url,**kwargs):

@@ -17,6 +17,74 @@ def sheet():
 
 
 class TotalMetricTests(unittest.TestCase):
+    def test_metric_turns_alternate_with_durable_progress_for_both_paths(self):
+        import json,requests
+        from kol_organic_meta_totals import fetch_metric_lanes,post_key
+        from kol_meta_runtime import MetaRuntime
+        values=sheet();values=values[:2]+[list(values[2]) for _ in range(11)]
+        for n,row in enumerate(values[2:]):row[0]='creator'+str(n);row[3]='https://instagram.com/reel/POST%d/'%n
+        calls=[]
+        def network(session,method,url,**kwargs):
+            params=kwargs['params']
+            if 'permalinks' in params:
+                calls.append('engagement');data={'data':[{'content_id':'id'+post_key(link),'permalink':link,
+                    'organic_insights':{'interaction':6,'likes':1,'comments':2,'shares':3,'saves':0}} for link in json.loads(params['permalinks'])]}
+            else:
+                calls.append('views');name=params['fields'].split('username(')[1].split(')')[0];key='POST'+name.removeprefix('creator')
+                data={'business_discovery':{'media':{'data':[{'id':'id'+key,'permalink':'https://instagram.com/reel/'+key+'/','view_count':10}]}}}
+            r=requests.Response();r.status_code=200;r._content=json.dumps(data).encode();return r
+        def paid(env,content,cache):return {},{item['content_id']:{'value':0} for item in content.values()}
+        with tempfile.TemporaryDirectory() as directory,patch('requests.sessions.Session.request',network),patch('kol_organic_meta.fetch_ad_interactions',side_effect=paid):
+            root=Path(directory);registry={}
+            for i,expected in enumerate((['engagement','views'],['views','engagement'])):
+                calls.clear()
+                with MetaRuntime(root,'test',now=lambda:1792580000+400*i) as runtime,runtime.stage('organic-meta',resume=True):
+                    env={'META_ACCESS_TOKEN':'test','_KOL_META_RUNTIME':runtime,'KOL_META_METRIC_BATCH_REQUESTS':'1'}
+                    content,registry,natural,interaction=fetch_metric_lanes(env,values,[],[],registry,root,root/'ids.json')
+                self.assertEqual(calls,expected)
+                self.assertEqual(sum('view_count' in x for x in content.values()),i+1)
+                self.assertEqual(sum('content_id' in x for x in natural.values()),5*(i+1))
+                self.assertEqual(len(interaction),5*(i+1))
+    def test_deferred_engagement_is_not_reported_as_missing_api_fields(self):
+        from kol_organic_meta_totals import method_a_values
+        from kol_meta_runtime import MetaDeferred
+        collected={}
+        with tempfile.TemporaryDirectory() as directory,patch('kol_organic_meta.fetch_content',side_effect=MetaDeferred('Meta quota protection')):
+            method_a_values({},sheet(),Path(directory),Path(directory)/'cache',natural_out=collected)
+            self.assertTrue((Path(directory)/'Organic-Meta-Method-A-source.json').exists())
+        self.assertEqual(collected['ABC']['_fetch_status'],'deferred')
+        item=metric_plan(sheet(),{},method_a={},natural_content=collected)[0]
+        self.assertIn('Engagement update deferred',item['reason'])
+        self.assertNotIn('API did not return Likes/Comments/Shares',item['reason'])
+        self.assertFalse(any(c in item['changes'] for c in (9,10,11)))
+
+    def test_successful_empty_api_response_is_not_confused_with_defer(self):
+        from kol_organic_meta_totals import method_a_values
+        collected={}
+        with tempfile.TemporaryDirectory() as directory,patch('kol_organic_meta.fetch_content',return_value={}):
+            method_a_values({},sheet(),Path(directory),Path(directory)/'cache',natural_out=collected)
+        self.assertEqual(collected['ABC']['_fetch_status'],'not_returned')
+        reason=metric_plan(sheet(),{},method_a={},natural_content=collected)[0]['reason']
+        self.assertIn('API did not return matching post',reason)
+        self.assertNotIn('Engagement update deferred',reason)
+
+    def test_cleanup_replaces_only_known_false_claim_not_manual_notes(self):
+        from kol_organic_meta_totals import cleanup_note_plan
+        values=sheet();values[2][16]='Public Views unavailable: quota; API did not return Likes/Comments/Shares: exact post unresolved; KOL fee requires manual entry'
+        other=list(values[2]);other[0]='manual';other[16]='Manual: API did not return Likes/Comments/Shares: exact post unresolved';values.append(other)
+        planned=cleanup_note_plan(values)
+        self.assertEqual(len(planned),1)
+        self.assertEqual(planned[0]['row'],3);self.assertEqual(planned[0]['changes'],{})
+        self.assertIn('Engagement update deferred',planned[0]['reason'])
+        self.assertNotIn('API did not return Likes/Comments/Shares',planned[0]['reason'])
+        self.assertIn('KOL fee requires manual entry',planned[0]['reason'])
+
+    def test_cleanup_does_not_blame_quota_for_a_missing_link(self):
+        from kol_organic_meta_totals import cleanup_note_plan
+        values=sheet();values[2][3]='';values[2][16]='Missing or unsupported post link; API did not return Likes/Comments/Shares: exact post unresolved'
+        reason=cleanup_note_plan(values)[0]['reason']
+        self.assertNotIn('quota',reason.lower())
+        self.assertIn('missing or unsupported post link',reason.lower())
     def test_shared_guard_defer_preserves_completed_creator_views(self):
         from kol_organic_meta_totals import fetch_totals
         from kol_meta_runtime import MetaDeferred

@@ -259,6 +259,11 @@ Other hosts/apps sharing Meta credentials remain outside this guard.
 - Each invocation sends at most 40 Meta network requests by default
   (`KOL_META_REQUEST_BATCH_SIZE`, bounded to 1–100). Checkpoint hits do not consume
   this budget. A batch limit queues the remainder for the five-minute poll.
+- Organic Meta gives Views and engagement separate turns of at most five new
+  requests each (`KOL_META_METRIC_BATCH_REQUESTS`, 1–10). Checkpoint hits are free.
+  The starting turn rotates persistently; after a quota stop the other metric
+  gets the first turn next time. Discovery/status inventory share a separate
+  two-request lane, so metadata cannot consume the entire metric budget.
 - App, ad-account and business-use-case usage headers share an 80% threshold.
   HTTP 429 or Meta codes 4/17/613/80002 also trigger a persisted one-hour cooldown.
   During cooldown no new KOL Graph requests are sent, even after process restart;
@@ -273,6 +278,20 @@ Other hosts/apps sharing Meta credentials remain outside this guard.
   pending stages; private state records the last usage headers and stage.
 - Plan-only commands do not persist new continuation jobs or modify the quota
   state. Native Sheets formatting/manual-field guards remain unchanged.
+
+Engagement source snapshots distinguish deferred/unqueried, failed API requests,
+successful responses without the matching post, and confirmed posts missing a
+specific counter. Only the last case is reported as missing Likes/Comments/Shares.
+Deferral never clears existing metric cells. Method A and CPE formulas are unchanged.
+To correct the older false `exact post unresolved` counter explanation without
+sending any Meta requests or changing metrics/status/formatting, use:
+
+```bash
+.venv-kol/bin/python -u kol_tracker.py organic-clean-notes --apply
+```
+
+This replaces only the known managed false claim with a queued/deferred reason;
+manual notes and unrelated legitimate reasons remain intact, and F1 is not advanced.
 
 Missing counters retain prior values and Q states
 the unavailable metric names, without basis labels; missing Saves is not zero. A known four-part I

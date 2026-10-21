@@ -51,6 +51,8 @@ class MetaRuntime:
         self.path=self.root/'meta-request-progress.json'
         self.now=now;self.budget=max(1,min(100,int(budget)));self.persist=persist;self.token_hash=hashlib.sha256(token.encode()).hexdigest()
         self.lock=threading.RLock();self.current='poll';self.resuming=False;self.sent=0;self.hits=0;self.deferred=set()
+        self.current_lane=None;self.lane_sent={};self.lane_limits={}
+        self.rotation_started=False
         try:self.state=json.loads(self.path.read_text())
         except (OSError,ValueError):self.state={}
         if self.state.get('token')!=self.token_hash:self.state={}
@@ -73,6 +75,19 @@ class MetaRuntime:
         previous=(self.current,self.resuming);self.current=name;self.resuming=resume
         try:yield
         finally:self.current,self.resuming=previous
+
+    @contextmanager
+    def lane(self,name,budget=5):
+        previous=self.current_lane;self.current_lane=name
+        self.lane_limits[name]=max(1,int(budget));self.lane_sent.setdefault(name,0)
+        try:yield
+        finally:self.current_lane=previous
+
+    def metric_order(self):
+        first=self.state.get('organic_meta_next_lane','engagement')
+        if first not in ('views','engagement'):first='engagement'
+        other='views' if first=='engagement' else 'engagement'
+        return [first,other]
 
     def pending(self,due=False):
         return [k for k,v in self.state['pending'].items() if not due or v.get('retry_at',0)<=self.now()]
@@ -127,7 +142,16 @@ class MetaRuntime:
             if self.sent>=self.budget:
                 reason='Meta batch budget reached; remaining requests queued'
                 self.defer(reason,300);raise MetaDeferred(reason)
+            lane=self.current_lane
+            if lane and self.lane_sent[lane]>=self.lane_limits[lane]:
+                reason='Meta %s batch pending; remaining requests queued'%lane
+                self.defer(reason,300);raise MetaDeferred(reason)
             self.sent+=1
+            if lane:self.lane_sent[lane]+=1
+            if lane in ('views','engagement') and not self.rotation_started:
+                self.state['organic_meta_next_lane']='engagement' if lane=='views' else 'views'
+                self.rotation_started=True
+                self.save()
             try:result=self.original(session,method,url,**kwargs)
             except requests.RequestException:
                 reason='Meta network request failed; queued for retry'
@@ -140,7 +164,7 @@ class MetaRuntime:
             for header in ('x-app-usage','x-ad-account-usage','x-business-use-case-usage'):
                 try:usage[header]=json.loads(result.headers.get(header,'{}'))
                 except (ValueError,TypeError):pass
-            self.state['last_usage']={'at':self.now(),'stage':self.current,'headers':usage}
+            self.state['last_usage']={'at':self.now(),'stage':self.current,'lane':lane,'headers':usage}
             def percentages(value):
                 if isinstance(value,dict):
                     for k,v in value.items():
@@ -153,6 +177,8 @@ class MetaRuntime:
             if limited or near:
                 reason=('Meta rate limit' if limited else 'Meta usage near limit')+'; remaining requests deferred'
                 self.state.update(blocked_until=self.now()+3600,blocked_reason=reason)
+                if lane in ('views','engagement'):
+                    self.state['organic_meta_next_lane']='engagement' if lane=='views' else 'views'
                 self.defer(reason)
             if limited:raise MetaDeferred(reason)
             if result.ok and isinstance(data,dict) and 'error' not in data:

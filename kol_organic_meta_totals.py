@@ -4,6 +4,7 @@ import json
 import math
 import re
 from threading import Event
+from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -20,7 +21,8 @@ COUNTERS = {7:('view_count','Views'), 9:('total_like_count','Likes'),
 MEDIA_FIELDS = 'id,permalink,username,timestamp,media_type,media_product_type'
 MANAGED = ('自动：','API did not return ', 'Missing or unsupported post link',
            'KOL fee requires manual entry','CPM ','CPE ','Total ','Public ', 'Slack ',
-           'Metrics pending immediate','Immediate update failed','Metrics not available yet')
+           'Metrics pending immediate','Immediate update failed','Metrics not available yet',
+           'Engagement ','Interaction update deferred')
 
 
 def number(value):
@@ -62,7 +64,16 @@ def metric_plan(values, content, method_a=None, natural_content=None):
             for col,field in ((9,'likes'),(10,'comments'),(11,'shares'),(12,'saves')):
                 if number(metrics.get(field)):changes[col]=metrics[field]
                 elif col!=12:absent.append(field.title())
-            if absent:reasons.append('API did not return '+ '/'.join(absent)+('' if exact else ': exact post unresolved'))
+            state=original_content.get('_fetch_status')
+            if absent and key:
+                if state=='deferred':reasons.append('Engagement update deferred: '+original_content['_reason'])
+                elif state=='failed':reasons.append('Engagement request failed: '+original_content['_reason'])
+                elif state=='not_returned':reasons.append('API did not return matching post')
+                elif exact:reasons.append('API did not return '+ '/'.join(absent))
+                elif original_content.get('content_id'):reasons.append('Engagement identity mismatch; metrics retained')
+                else:reasons.append('Engagement not queried; queued for retry')
+            if original_content.get('_paid_status')=='deferred' and not number((method_a or {}).get(row)):
+                reasons.append('Interaction update deferred: '+original_content['_paid_reason'])
         if key and method_a is not None and number(method_a.get(row)):
             changes[8]=method_a[row]
         if reasons:
@@ -91,29 +102,70 @@ def note_changes(values, planned):
     return result
 
 
+def cleanup_note_plan(values):
+    """Replace only the known false claim; no metric or manual note changes."""
+    claim='API did not return Likes/Comments/Shares: exact post unresolved'
+    planned=[]
+    for row,values_row in enumerate(values[2:],3):
+        old=str(values_row[16]) if len(values_row)>16 else ''
+        if claim in old and old.startswith(MANAGED):
+            replacement=('Engagement update deferred: not queried due to Meta quota protection; queued for retry'
+                if len(values_row)>3 and post_key(values_row[3]) else 'Engagement not queried: missing or unsupported post link')
+            planned.append({'row':row,'changes':{},'reason':old.replace(claim,
+                replacement),'content_id':''})
+    return planned
+
+
+def cleanup_notes(env,output,apply):
+    from kol_tracker import sheet_session,read_tab
+    session,endpoint=sheet_session(dict(env,KOL_TRACKER_GOOGLE_SHEETS_LINK=env['KOL_ORGANIC_SHEETS_LINK']))
+    prop,native,values=read_tab(session,endpoint,'Meta-IG');validate_schema(values,{})
+    planned=cleanup_note_plan(values)
+    write_updates(session,endpoint,prop,native,values,planned,[],output,apply)
+    print('Organic Meta false engagement notes corrected: %d'%len(planned),flush=True)
+    return planned
+
+
 def method_a_values(env,values,output,cache_path,natural_out=None):
     """Keep the approved existing Interaction calculation; isolate failed batches."""
     from kol_organic_meta import fetch_content,fetch_ad_interactions
+    from kol_meta_runtime import MetaDeferred
+    from kol_tracker import save_json
     links=sorted({'https://www.instagram.com/reel/'+post_key(row[3])+'/'
                   for row in values[2:] if len(row)>3 and row[0] and post_key(row[3])})
     batches=[links[i:i+5] for i in range(0,len(links),5)]
-    def fetch(batch):
-        try:return fetch_content(env,batch)
-        except (RuntimeError,requests.RequestException):return {}
-    natural={}
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        for count,batch in enumerate(pool.map(fetch,batches),1):
-            natural.update(batch)
-            print('Organic Meta Interaction content: %d/%d'%(count,len(batches)),flush=True)
+    natural={};deferred=''
+    for count,batch in enumerate(batches,1):
+        status='not_returned';reason='';found={}
+        try:
+            if deferred:raise MetaDeferred(deferred)
+            found=fetch_content(env,batch)
+        except MetaDeferred as error:status='deferred';reason=deferred=str(error)
+        except (RuntimeError,requests.RequestException) as error:
+            status='failed'
+            http=re.search(r'HTTP \d{3}',str(error));reason=http.group() if http else 'API request or response validation failed'
+            runtime=env.get('_KOL_META_RUNTIME')
+            if runtime:runtime.defer('Engagement request failed; queued for retry',1800)
+        for link in batch:
+            key=post_key(link)
+            natural[key]=found.get(key,{'_fetch_status':status,'_reason':reason,'permalink':link})
+        print('Organic Meta Interaction content: %d/%d'%(count,len(batches)),flush=True)
+    actual={key:item for key,item in natural.items() if item.get('content_id')}
+    paid={}
+    if actual:
+        try:_,paid=fetch_ad_interactions(env,actual,cache_path)
+        except (RuntimeError,requests.RequestException) as error:
+            if isinstance(error,MetaDeferred):
+                for item in actual.values():item.update(_paid_status='deferred',_paid_reason=str(error))
+            print('Organic Meta paid Interaction unavailable; existing Interaction/CPE retained',flush=True)
+        runtime=env.get('_KOL_META_RUNTIME')
+        if runtime and runtime.current in runtime.deferred:
+            for item in actual.values():
+                if str(item['content_id']) not in paid:
+                    item.update(_paid_status='deferred',_paid_reason=runtime.state['pending'][runtime.current]['reason'])
     if natural_out is not None:natural_out.update(natural)
-    if not natural:return {}
-    try:_,paid=fetch_ad_interactions(env,natural,cache_path)
-    except (RuntimeError,requests.RequestException):
-        print('Organic Meta paid Interaction unavailable; existing Interaction/CPE retained',flush=True)
-        return {}
-    old_plan,_=validate_schema(values,natural,paid)
+    old_plan,_=validate_schema(values,actual,paid)
     result={item['row']:item['changes'][8] for item in old_plan if 8 in item['changes']}
-    from kol_tracker import save_json
     save_json(output/'Organic-Meta-Method-A-source.json',{'natural':natural,'paid':paid,'rows':result})
     return result
 
@@ -382,15 +434,36 @@ def completed_metric_keys(planned,values,link_aliases=None):
         and 'target protected' not in x['reason']))
 
 
+def fetch_metric_lanes(env,values,discovery,ads,registry,output,state_path):
+    """Give both metric paths a bounded turn, rotating after interruption."""
+    from kol_tracker import save_json
+    runtime=env.get('_KOL_META_RUNTIME')
+    order=runtime.metric_order() if runtime else ['views','engagement']
+    batch=max(1,min(10,int(env.get('KOL_META_METRIC_BATCH_REQUESTS','5'))))
+    content={};natural={};interaction={}
+    for name in order:
+        print('Organic Meta metric turn: '+name,flush=True)
+        with runtime.lane(name,batch) if runtime else nullcontext():
+            if name=='views':
+                content,registry=fetch_totals(env,values,discovery,ads,registry)
+                save_json(output/'Organic-Meta-Totals-source.json',content)
+            else:
+                interaction=method_a_values(env,values,output,state_path.parent/'organic-paid-cache.json',natural_out=natural)
+    return content,registry,natural,interaction
+
+
 def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
     from kol_targeting import load_link_aliases
     if link_aliases is None:link_aliases=load_link_aliases(env)
     from kol_tracker import BASE, sheet_session,read_tab,save_json
     from kol_organic_discovery import run as discover
     from kol_organic_meta import code_plan,media_identity_plan,status_plan
+    runtime=env.get('_KOL_META_RUNTIME')
     discovery=[]
     if not creators and target_keys is None:
-        try:discovery=discover(env,output,apply) or []
+        try:
+            with runtime.lane('metadata',2) if runtime else nullcontext():
+                discovery=discover(env,output,apply) or []
         except (RuntimeError,requests.RequestException):
             print('Organic Meta API discovery unavailable; existing rows still queried',flush=True)
     session,endpoint=sheet_session(dict(env,KOL_TRACKER_GOOGLE_SHEETS_LINK=env['KOL_ORGANIC_SHEETS_LINK']))
@@ -399,16 +472,15 @@ def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
     selected=scope_values(resolve_values(values,'organic-meta',link_aliases),'organic-meta',target_keys)
     if creators:
         selected=[row if i<2 or (row and row[0] in creators) else [] for i,row in enumerate(selected)]
-    try:ads=ad_inventory(env)
+    try:
+        with runtime.lane('metadata',2) if runtime else nullcontext():
+            ads=ad_inventory(env)
     except (RuntimeError,requests.RequestException):
         ads=[];print('Organic Meta ad statuses unavailable; existing statuses retained',flush=True)
     state_path=Path(env.get('KOL_TRACKER_STATE_DIR',str(BASE/'data/processed/kol_tracker_runtime')))/'organic-meta-identities.json'
     try:registry=json.loads(state_path.read_text()).get('posts',{})
     except (ValueError,OSError):registry={}
-    content,registry=fetch_totals(env,selected,discovery,ads,registry)
-    save_json(output/'Organic-Meta-Totals-source.json',content)
-    natural={}
-    interaction=method_a_values(env,selected,output,state_path.parent/'organic-paid-cache.json',natural_out=natural)
+    content,registry,natural,interaction=fetch_metric_lanes(env,selected,discovery,ads,registry,output,state_path)
     planned=metric_plan(selected,content,interaction,natural_content=natural)
     identity_content={key:{'content_id':mid} for key,mid in registry.items()}
     identity_content.update({key:{'content_id':x['id']} for key,x in content.items() if verified_media(x,key)})
