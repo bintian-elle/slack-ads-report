@@ -116,7 +116,7 @@ TikTok 官方 Postman 集合列出只读 `GET /open_api/v1.3/tt_video/info/`，
 素材 Code 路径本次不接入定时任务，不额外申请权限、不导入素材。
 
 来源：https://www.postman.com/tiktok/tiktok-api-for-business/documentation/efqhadc/tiktok-business-api-v1-3
-# Organic Meta metrics (Method A interactions)
+# Organic Meta metrics (public lifetime totals)
 
 When `KOL_ORGANIC_SHEETS_LINK` is configured, the existing daily KOL task also
 updates its `Meta-IG` tab at America/New_York 02:00.
@@ -211,29 +211,37 @@ block insertion. Dropdowns are copied natively; fees remain blank for manual ent
 before the separate metrics stage; if metrics later fail, inserted identities
 remain and the next run does not duplicate them.
 
-The metric pass queries exact post
-permalink in batches of five. H and J:M remain natural `organic_insights` metrics.
-I uses Method A: API natural Interaction, or the sum of natural likes/comments/
-shares/saves when that total is unavailable, plus Instagram Ads Insights
-`onsite_conversion.post_net_like` + `onsite_conversion.post_net_comment` + `post`.
-Ads bind only by exact Creative `source_instagram_media_id` to the returned
-content ID, using a fresh complete account inventory. Each Ad ID is counted once
-per post; Facebook/other platforms, saves, gross engagement and video views are
-not added. Paid reads cover each ad's creation date through today in the ad
-account timezone. Each run still reads the complete inventory and live statuses.
-Paid metrics are cached in `KOL_TRACKER_STATE_DIR/organic-paid-cache.json`.
-On first observed pause, retain daily reads for at least 30 days, then refresh
-every seven days. Active/unknown states, reactivation, missing/invalid caches
-and changed query scope require fresh reads. Organic post metrics remain daily.
-Optional `KOL_ORGANIC_PAUSED_GRACE_DAYS` (minimum 30) and
-`KOL_ORGANIC_PAUSED_REFRESH_DAYS` (default 7) control this optimization; these
-are operational defaults, not a Meta guarantee that paused metrics are final.
-Private plans record each ad's actual cached fetch date. A failed
-inventory/Insights read aborts before any sheet write.
-No estimate labels are written; the private plan retains calculation provenance.
-Consequently I and O use a mixed natural/paid interaction basis, while H/N
-remain natural-view based. No CSV data is used. N:O use the
-existing manually maintained G fee: fee/views*1000 and fee/interaction.
+The production entry point is `kol_organic_meta_totals.py`. It verifies each
+returned permalink against the exact sheet post shortcode, then reads Media
+`total_views_count`, `total_like_count`, `total_comments_count`, `shares_count`
+and `saved_count` into H and J:M. Never substitute natural counters or add Ads
+Insights to these public counters. I/CPE deliberately retain the approved Method A:
+natural Interaction (four-part fallback only when complete) plus exact-source-media
+Instagram paid net likes, net comments and shares. Paid pause caching remains as
+implemented by `kol_organic_meta.py`; no public counters are added to Method A.
+Missing counters retain prior values and Q states
+the unavailable metric names, without basis labels; missing Saves is not zero. A known four-part I
+formula is frozen at its old result when totals are incomplete, avoiding a mixed
+sum. CPM/CPE require fresh nonzero total Views/Interaction respectively.
+Public lifetime counters need not equal a date-filtered Business Suite report;
+unavailable metrics are not claimed to reproduce the full web report.
+IDs are resolved through Content Discovery, exact Creative source-media binding,
+manual Reel ID, or Creator Business Discovery with exact permalink verification.
+`organic-meta-identities.json` caches identities only, never metric freshness.
+F1 advances only after a successful counter write and includes the partial batch
+count. No CSV data is used. N:O use the existing manually maintained G fee:
+fee/views*1000 and fee/interaction.
+
+The five-minute `poll` also runs `kol_organic_meta_slack.py`: formal and ordinary
+clear live notices, including thread replies, can add identity-only rows before
+metrics become accessible. Initial rollout looks back seven days; subsequent
+polls overlap one day and inspect changed threads. Deduplicate /p/ and /reel/
+by exact shortcode even when the manual Creator cell is blank. API publication
+date is preferred, otherwise use the Slack message date in America/New_York.
+Copy Creator/link/code; fees remain manual; Q explains missing data. Later Slack
+codes fill only blank E on exact post matches; nonblank/manual codes are retained.
+Standalone preview: `kol_tracker.py organic-meta-poll`; add `--apply` to write.
+Focused read-only totals: `kol_tracker.py organic --creators nutritionbyanastasiia eva.hooft`.
 Existing N:O formulas are preserved; literal cells are recalculated when inputs
 are valid. Null/missing metrics and unmatched posts retain existing values,
 with omissions in the private run plan; zero denominators retain derived values.
@@ -253,11 +261,11 @@ No Media ID is written as an Ad Code; existing E is preserved. Any ACTIVE ad
 means `testing`; exclusively paused
 ads mean `pause` (or the existing dropdown's `paused` spelling). Dropdown options
 are never modified. T0 and other manual statuses, unknown statuses, and unmatched
-or shared ad bindings remain unchanged. No Organic new rows
-are added by Slack. API failure prevents any Organic write. Native snapshots,
+or shared ad bindings remain unchanged. Organic Meta Slack fallback can add
+identity-only rows independently of API discovery. Native snapshots,
 pre-write change detection and readback verification protect the existing sheet.
 `daily` is read-only by default; `daily --apply` is used by the existing timer.
-Organic F1 is updated to `[MM/DD update]` in America/Chicago time in the same
+Organic F1 is updated to `[MM/DD update]` in America/New_York time in the same
 atomic batch as successful content updates. Failed fetches/writes do not advance
 F1; runs without writable data do not advance it. All other headers are preserved.
 Progress logs show content batches and the ad status query stage.
@@ -268,8 +276,8 @@ fees, and zero/missing CPM/CPE denominators. Blank cells, legacy `自动：` not
 and recognized generated English reasons are managed; user notes are preserved.
 Legacy headers/notes migrate on the next run; reasons clear after recovery.
 New manually added content rows receive the same checks on the next daily run;
-this does not enable automatic Organic row insertion. Global API failures abort
-the run without replacing per-row explanations with guessed causes.
+API and Slack discovery both support automatic row insertion as described above.
+Metric failures retain existing values and explain unavailable fields.
 For Organic-only preview: `.venv-kol/bin/python kol_tracker.py organic`.
 For Organic-only write: `.venv-kol/bin/python kol_tracker.py organic --apply`.
 Both share the existing tracker lock; no extra timer or robot restart is needed.

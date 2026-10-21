@@ -143,7 +143,17 @@ def run(env,output,apply):
     save_json(output/'Organic-Meta-discovery.json',{'additions':additions,'pending':pending})
     print('Organic discovery: %d Accepted Bluevua Reels; %d excluded/unverified' % (len(additions),len(pending)),flush=True)
     if not apply or not additions:
-        return
+        return content
+    insert_additions(env,output,apply,prop,native,values,additions,pending)
+    return content
+
+
+def insert_additions(env,output,apply,prop,native,values,additions,pending=()):
+    """Shared native insertion; API discovery and Slack fallback use one writer."""
+    from kol_tracker import sheet_session,read_tab,save_json
+    from update_meta_tracker import write_range
+    if not apply or not additions:return
+    session,endpoint=sheet_session(dict(env,KOL_TRACKER_GOOGLE_SHEETS_LINK=env['KOL_ORGANIC_SHEETS_LINK']))
     tab = native['sheets'][0]
     if tab.get('tables') or tab.get('merges') or tab.get('protectedRanges'):
         raise RuntimeError('Structured Organic sheet requires explicit insert review')
@@ -184,7 +194,12 @@ def run(env,output,apply):
                     'startColumnIndex':col,'endColumnIndex':col+1},'pasteType':'PASTE_NORMAL'}})
             body.append(write_range(prop['sheetId'],index+1,col,['']))
         day = datetime.strptime(item['date'],'%Y-%m-%d').date()
-        for col,value in [(0,item['creator']),(1,(day-datetime(1899,12,30).date()).days),(3,item['post_link'])]:
+        identity=[(0,item['creator']),(1,(day-datetime(1899,12,30).date()).days),(3,item['post_link'])]
+        if item.get('ad_code'):identity.append((4,item['ad_code']))
+        if item.get('note'):identity.append((16,item['note']))
+        if item.get('content_id','').isdigit() and len(values[1])>17 and str(values[1][17]).strip()=='Reel ID':
+            identity.append((17,item['content_id']))
+        for col,value in identity:
             if new_cells[col].get('dataValidation'):
                 raise RuntimeError('Constrained new identity cell')
             body.append(write_range(prop['sheetId'],index+1,col,[value]))

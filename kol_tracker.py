@@ -21,7 +21,7 @@ from add_tiktok_tracker_rows import MARKER, URL, creator_heading, plain_text, po
 from sync_creator_tracker import BASE, code_key as meta_code, get_json, graph_pages, ad_location, post_key as ig_post
 from update_meta_tracker import exact_mapping, new_row_status, run as meta_daily, write_range
 from update_tiktok_tracker import creator_segment, fetch_report, fetch_ad_details, normalized
-from kol_organic_meta import run as organic_meta_daily
+from kol_organic_meta_totals import run as organic_meta_daily
 from kol_organic_tiktok import run as organic_tiktok_daily
 
 CHICAGO = ZoneInfo('America/Chicago')
@@ -462,9 +462,11 @@ def tiktok_daily(env, output, apply):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'check'])
+    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'check'])
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--creators', nargs='+', help='Organic Meta only: exact Creator names for a focused verification/update')
     args = parser.parse_args()
+    if args.creators and args.task!='organic':parser.error('--creators is only supported for organic')
     load_dotenv(BASE / '.env')
     env = dict(os.environ)
     state_dir = Path(env.get('KOL_TRACKER_STATE_DIR', str(BASE / 'data/processed/kol_tracker_runtime')))
@@ -473,7 +475,7 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if args.task not in ['daily', 'organic', 'organic-tiktok', 'organic-youtube', 'youtube-poll']:
+            if args.task not in ['daily', 'organic', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll']:
                 print('Another tracker task is running; skipped', flush=True); return
             print('Another tracker task is running; daily update queued', flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -486,10 +488,23 @@ def main():
                 print(title + ' native sheet accessible: ' + str(prop['sheetId']))
             print('Tracker configuration check passed; no writes'); return
         if args.task == 'poll':
-            poll(env, state_dir / 'slack-state.json', output, args.apply)
+            actions=[('Ads',lambda:poll(env,state_dir/'slack-state.json',output,args.apply))]
+            if env.get('KOL_ORGANIC_SHEETS_LINK'):
+                from kol_organic_meta_slack import poll as organic_slack_poll
+                actions.append(('Organic Meta Slack',lambda:organic_slack_poll(env,output,args.apply)))
             if env.get('KOL_ORGANIC_SHEETS_LINK') and env.get('YOUTUBE_API_KEY'):
                 from kol_organic_youtube import poll as youtube_poll
-                youtube_poll(env, output, args.apply)
+                actions.append(('Organic YouTube Slack',lambda:youtube_poll(env,output,args.apply)))
+            failures=[]
+            for name,action in actions:
+                try:action()
+                except Exception as error:
+                    failures.append(name)
+                    print(name+' failed ('+type(error).__name__+'); other poll tasks continue',flush=True)
+            if failures:raise SystemExit('Poll tasks failed: '+', '.join(failures))
+        elif args.task == 'organic-meta-poll':
+            from kol_organic_meta_slack import poll as organic_slack_poll
+            organic_slack_poll(env,output,args.apply)
         elif args.task == 'youtube-poll':
             from kol_organic_youtube import poll as youtube_poll
             youtube_poll(env, output, args.apply)
@@ -497,7 +512,7 @@ def main():
             from kol_organic_youtube import run as youtube_daily
             youtube_daily(env, output, args.apply)
         elif args.task == 'organic':
-            organic_meta_daily(env, output, args.apply)
+            organic_meta_daily(env, output, args.apply, creators=args.creators)
         elif args.task == 'organic-tiktok':
             organic_tiktok_daily(env, output, args.apply)
         else:
