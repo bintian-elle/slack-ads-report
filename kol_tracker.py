@@ -495,20 +495,8 @@ def main():
                 print(title + ' native sheet accessible: ' + str(prop['sheetId']))
             print('Tracker configuration check passed; no writes'); return
         if args.task == 'poll':
-            actions=[('Ads',lambda:poll(env,state_dir/'slack-state.json',output,args.apply))]
-            if env.get('KOL_ORGANIC_SHEETS_LINK'):
-                from kol_organic_meta_slack import poll as organic_slack_poll
-                actions.append(('Organic Meta Slack',lambda:organic_slack_poll(env,output,args.apply)))
-            if env.get('KOL_ORGANIC_SHEETS_LINK') and env.get('YOUTUBE_API_KEY'):
-                from kol_organic_youtube import poll as youtube_poll
-                actions.append(('Organic YouTube Slack',lambda:youtube_poll(env,output,args.apply)))
-            failures=[]
-            for name,action in actions:
-                try:action()
-                except Exception as error:
-                    failures.append(name)
-                    print(name+' failed ('+type(error).__name__+'); other poll tasks continue',flush=True)
-            if failures:raise SystemExit('Poll tasks failed: '+', '.join(failures))
+            from kol_live_updates import poll as live_poll
+            live_poll(env,output,args.apply)
         elif args.task == 'organic-meta-poll':
             from kol_organic_meta_slack import poll as organic_slack_poll
             organic_slack_poll(env,output,args.apply)

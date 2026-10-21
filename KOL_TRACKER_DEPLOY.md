@@ -211,10 +211,14 @@ block insertion. Dropdowns are copied natively; fees remain blank for manual ent
 before the separate metrics stage; if metrics later fail, inserted identities
 remain and the next run does not duplicate them.
 
-The production entry point is `kol_organic_meta_totals.py`. It verifies each
-returned permalink against the exact sheet post shortcode, then reads Media
-`total_views_count`, `total_like_count`, `total_comments_count`, `shares_count`
-and `saved_count` into H and J:M. Never substitute natural counters or add Ads
+The production entry point is `kol_organic_meta_totals.py`. It verifies both
+returned Media ID and permalink against the exact sheet post, reads H only from
+Business Discovery `view_count`, and reads Media `total_like_count`,
+`total_comments_count`, `shares_count`, `saved_count` into J:M. Never substitute
+`total_views_count` or natural Views when Business Discovery Views are missing.
+Public counters are not guaranteed to reproduce a differently dated Business
+Suite export; compare publication-to-current windows and contemporaneous reads.
+Never substitute natural counters or add Ads
 Insights to these public counters. I/CPE deliberately retain the approved Method A:
 natural Interaction (four-part fallback only when complete) plus exact-source-media
 Instagram paid net likes, net comments and shares. Paid pause caching remains as
@@ -232,15 +236,27 @@ F1 advances only after a successful counter write and includes the partial batch
 count. No CSV data is used. N:O use the existing manually maintained G fee:
 fee/views*1000 and fee/interaction.
 
-The five-minute `poll` also runs `kol_organic_meta_slack.py`: formal and ordinary
-clear live notices, including thread replies, can add identity-only rows before
-metrics become accessible. Initial rollout looks back seven days; subsequent
-polls overlap one day and inspect changed threads. Deduplicate /p/ and /reel/
+The five-minute `poll` now uses `kol_live_updates.py` for all five automated tabs:
+Ads Meta/TikTok and Organic Meta-IG/TikTok/YTB. A single Slack snapshot supports
+formal and ordinary launch notices, replies and edited parents. Insert identity
+rows, then fetch available metrics in the same poll, without waiting for daily.
+`live-metric-jobs.json` persists jobs before inserts, completed identities, exact
+tracking-link aliases, sanitized failures and retry times. Initial rollout looks
+back seven days; later polls overlap one day and inspect changed threads.
+Successful jobs do not repeat every five minutes. Unmatched/unavailable jobs retry
+after five minutes for the first six attempts, then hourly. TikTok 403/429 and link
+resolution restrictions retain 24-hour/minimum Retry-After backoff; successful
+TikTok public reads still reuse same-day cache and use 3–7 second request spacing.
+Native writes target exact pending posts only; full ad inventory/report reads may
+still be required to validate Ad Name bindings. A rejected row is isolated; other
+rows/tabs continue. Existing midnight daily defaults are unchanged.
+Deduplicate /p/ and /reel/
 by exact shortcode even when the manual Creator cell is blank. API publication
 date is preferred, otherwise use the Slack message date in America/New_York.
 Copy Creator/link/code; fees remain manual; Q explains missing data. Later Slack
 codes fill only blank E on exact post matches; nonblank/manual codes are retained.
-Standalone preview: `kol_tracker.py organic-meta-poll`; add `--apply` to write.
+Legacy Meta-only identity preview: `kol_tracker.py organic-meta-poll`.
+Unified read-only preview: `kol_tracker.py poll`; add `--apply` to insert and fetch.
 Focused read-only totals: `kol_tracker.py organic --creators nutritionbyanastasiia eva.hooft`.
 Existing N:O formulas are preserved; literal cells are recalculated when inputs
 are valid. Null/missing metrics and unmatched posts retain existing values,
@@ -276,7 +292,7 @@ fees, and zero/missing CPM/CPE denominators. Blank cells, legacy `自动：` not
 and recognized generated English reasons are managed; user notes are preserved.
 Legacy headers/notes migrate on the next run; reasons clear after recovery.
 New manually added content rows receive the same checks on the next daily run;
-API and Slack discovery both support automatic row insertion as described above.
+API and unified Slack discovery support automatic row insertion as described above.
 Metric failures retain existing values and explain unavailable fields.
 For Organic-only preview: `.venv-kol/bin/python kol_tracker.py organic`.
 For Organic-only write: `.venv-kol/bin/python kol_tracker.py organic --apply`.

@@ -14,7 +14,8 @@ FIELDS = ('views', 'likes', 'comments', 'saves', 'shares')
 NOTE_HEADER = 'Reason for data update failure'
 NOTE_PREFIXES = ('Missing or unsupported TikTok link', 'Invalid or missing video counters',
     'Video data unavailable', 'HTTP request failed', 'Request timed out',
-    'Request already attempted today', 'TikTok HTTP ', 'Skipped due to TikTok backoff')
+    'Request already attempted today', 'TikTok HTTP ', 'Skipped due to TikTok backoff',
+    'Metrics pending immediate','Immediate update failed','Metrics not available yet')
 
 
 def failure_reason(error):
@@ -226,5 +227,7 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
         raise RuntimeError('Organic TikTok native readback failed')
     print('Organic TikTok metrics and Views update date verified',flush=True)
     if blocked and not backoff_active:
-        raise RuntimeError('TikTok access restricted; successful rows/reasons written, backoff saved')
+        error=RuntimeError('TikTok access restricted; successful rows/reasons written, backoff saved')
+        error.successful_keys=set().union(*(row_keys('organic-tiktok',values[x['row']-1]) for x in planned))
+        raise error
     return set().union(*(row_keys('organic-tiktok',values[x['row']-1]) for x in planned))

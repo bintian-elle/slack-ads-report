@@ -49,8 +49,10 @@ systemctl list-timers --all 'kol-tracker-*' --no-pager
 schedule. It is not restarted by the KOL installation. Ads and Organic are two
 logical sheet refreshers sharing the independent `.venv-kol` environment and
 daily service, not two duplicate timers. `kol-tracker-poll` scans Slack every
-five minutes for new Ads rows, Organic Meta Slack fallback rows and Organic YouTube
-launch rows. `kol-tracker-daily` updates Ads and Organic at 02:00 America/New_York.
+five minutes for new posts in all five automated Ads/Organic tabs. It inserts
+identities and immediately attempts their metrics, retaining a durable retry
+queue for unavailable data. `kol-tracker-daily` updates all existing rows at
+02:00 America/New_York. Successful live jobs do not trigger whole-table refreshes.
 Organic Meta discovers 2026 Reels with an exact Accepted Bluevua collaborator
 relationship, inserting them in Organic Launch Date order through the Meta API and Sheets API.
 The persistent timer may catch up a missed run when enabled.

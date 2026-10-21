@@ -13,13 +13,14 @@ import requests
 
 from kol_organic_meta import post_key, plan as validate_schema
 
-COUNTERS = {7:('total_views_count','Views'), 9:('total_like_count','Likes'),
+COUNTERS = {7:('view_count','Views'), 9:('total_like_count','Likes'),
             10:('total_comments_count','Comments'), 11:('shares_count','Shares'),
             12:('saved_count','Saves')}
 MEDIA_FIELDS = ('id,permalink,username,timestamp,media_type,media_product_type,'
-                'total_views_count,total_like_count,total_comments_count,shares_count,saved_count')
+                'total_like_count,total_comments_count,shares_count,saved_count')
 MANAGED = ('自动：','API did not return ', 'Missing or unsupported post link',
-           'KOL fee requires manual entry','CPM ','CPE ','Total ','Public ', 'Slack ')
+           'KOL fee requires manual entry','CPM ','CPE ','Total ','Public ', 'Slack ',
+           'Metrics pending immediate','Immediate update failed','Metrics not available yet')
 
 
 def number(value):
@@ -142,7 +143,7 @@ def ad_inventory(env):
 def creator_media(env, username, wanted):
     """Resolve only exact permalinks within a named professional account."""
     if not re.fullmatch(r'[A-Za-z0-9_.]{1,30}',username):return {}
-    fields='id,permalink,username,timestamp,media_type,media_product_type'
+    fields='id,permalink,username,timestamp,media_type,media_product_type,view_count'
     ig=env.get('KOL_ORGANIC_META_IG_USER_ID','17841448894150543')
     data=api_read(env,ig,{'fields':'business_discovery.username(%s){id,username,media.limit(100){%s}}'%(username,fields)})
     media=data.get('business_discovery',{}).get('media',{})
@@ -161,7 +162,7 @@ def creator_media(env, username, wanted):
 
 def fetch_totals(env, values, discovery=(), ads=(), identities=None):
     from sync_creator_tracker import code_key
-    ids=dict(identities or {});errors={};bycreator={};wanted={}
+    ids=dict(identities or {});errors={};bycreator={};wanted={};business_views={}
     known={post_key(c.get('permalink','')):str(c['content_id']) for c in discovery if c.get('content_id')}
     code_ids={};link_ids={}
     for ad in ads:
@@ -183,29 +184,49 @@ def fetch_totals(env, values, discovery=(), ads=(), identities=None):
         if len(candidates)==1:ids[key]=next(iter(candidates))
         elif len(candidates)>1:ids.pop(key,None);errors[key]='conflicting exact media bindings'
         else:bycreator.setdefault(str(row[0]).strip().lstrip('@'),set()).add(key)
-    for count,(creator,keys) in enumerate(bycreator.items(),1):
-        try:
-            for key,item in creator_media(env,creator,keys).items():ids[key]=str(item['id'])
-        except APIReadError as exc:
-            for key in keys:errors[key]='Creator lookup '+str(exc)
-        print('Organic Meta exact Creator lookup: %d/%d'%(count,len(bycreator)),flush=True)
+    def discovery_read(pair):
+        creator,keys=pair
+        try:return creator,keys,creator_media(env,creator,keys),''
+        except APIReadError as exc:return creator,keys,{},'Creator lookup '+str(exc)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for count,(_,keys,found,error) in enumerate(pool.map(discovery_read,bycreator.items()),1):
+            for key,item in found.items():ids[key]=str(item['id']);business_views[key]=item
+            if error:
+                for key in keys:errors[key]=error
+            print('Organic Meta exact Creator lookup: %d/%d'%(count,len(bycreator)),flush=True)
     content={key:{'_error':errors.get(key,'exact media unresolved')} for key in wanted}
     grouped={}
     for key in wanted:
         if key in ids and key not in errors:grouped.setdefault(ids[key],[]).append(key)
-    def fetch(pair):
-        mid,keys=pair
+    batches=[list(grouped)[i:i+40] for i in range(0,len(grouped),40)]
+    def fetch(batch):
         try:
-            data=api_read(env,mid,{'fields':MEDIA_FIELDS})
-            return mid,keys,data
-        except APIReadError as exc:return mid,keys,{'_error':str(exc)}
+            data=api_read(env,'',{'ids':','.join(batch),'fields':MEDIA_FIELDS})
+            return {mid:data.get(mid,{'_error':'API did not return public counters'}) for mid in batch}
+        except APIReadError as exc:return {mid:{'_error':str(exc)} for mid in batch}
     with ThreadPoolExecutor(max_workers=3) as pool:
-        for count,(mid,keys,data) in enumerate(pool.map(fetch,grouped.items()),1):
-            for key in keys:
-                if verified_media(data,key) and str(data['id'])==mid:content[key]=data;ids[key]=mid
-                else:content[key]={'_error':data.get('_error','returned permalink does not match')}
-            if count%10==0 or count==len(grouped):
-                print('Organic Meta public totals: %d/%d'%(count,len(grouped)),flush=True)
+        for count,batch in enumerate(pool.map(fetch,batches),1):
+            for mid,data in batch.items():
+                for key in grouped[mid]:
+                    if verified_media(data,key) and str(data['id'])==mid:content[key]=dict(data);ids[key]=mid
+                    else:content[key]={'_error':data.get('_error','returned permalink does not match')}
+            print('Organic Meta public counter batch: %d/%d'%(count,len(batches)),flush=True)
+    view_groups={}
+    for key,row in wanted.items():
+        media=content[key]
+        if key in ids and key not in errors and key not in business_views:
+            username=str(media.get('username') or row[0]).strip().lstrip('@')
+            view_groups.setdefault(username,set()).add(key)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for count,(_,keys,found,_) in enumerate(pool.map(discovery_read,view_groups.items()),1):
+            business_views.update(found)
+            if count%10==0 or count==len(view_groups):
+                print('Organic Meta Business Discovery Views: %d/%d'%(count,len(view_groups)),flush=True)
+    for key,item in business_views.items():
+        if key in content and not verified_media(content[key],key) and verified_media(item,key) and str(item['id'])==ids.get(key):
+            content[key]=dict(item)
+        if key in content and verified_media(content[key],key) and verified_media(item,key) and str(item['id'])==str(content[key]['id']) and number(item.get('view_count')):
+            content[key]['view_count']=item['view_count'];content[key]['_views_source']='Business Discovery view_count'
     return content,ids
 
 

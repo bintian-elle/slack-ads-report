@@ -17,9 +17,28 @@ def sheet():
 
 
 class TotalMetricTests(unittest.TestCase):
+    def test_fetch_binds_business_views_by_both_media_id_and_permalink(self):
+        from kol_organic_meta_totals import fetch_totals
+        values=sheet();values[1]=values[1]+['Reel ID'];values[2]=values[2]+['12345678901']
+        node={'id':'12345678901','permalink':'https://instagram.com/reel/ABC/','username':'eva.hooft','total_like_count':10}
+        with patch('kol_organic_meta_totals.api_read',return_value={'12345678901':node}), \
+             patch('kol_organic_meta_totals.creator_media',return_value={'ABC':dict(node,view_count=5442)}):
+            content,_=fetch_totals({},values)
+        self.assertEqual(content['ABC']['view_count'],5442)
+        with patch('kol_organic_meta_totals.api_read',return_value={'12345678901':node}), \
+             patch('kol_organic_meta_totals.creator_media',return_value={'ABC':dict(node,id='OTHER',view_count=99999)}):
+            content,_=fetch_totals({},values)
+        self.assertNotIn('view_count',content['ABC'])
+
+    def test_total_views_is_not_business_discovery_view_count(self):
+        rows=metric_plan(sheet(),{'ABC':{'id':'123','permalink':'https://instagram.com/reel/ABC/',
+                                      'total_views_count':4841}},method_a={3:336})
+        self.assertNotIn(7,rows[0]['changes'])
+        self.assertEqual(rows[0]['changes'][8],336)
+
     def test_method_a_interaction_independent_of_public_counter_sum(self):
         rows=metric_plan(sheet(),{'ABC':{'id':'123','permalink':'https://instagram.com/reel/ABC/',
-            'total_views_count':39099,'total_like_count':242,'total_comments_count':295,'shares_count':133}},
+            'view_count':39099,'total_like_count':242,'total_comments_count':295,'shares_count':133}},
             method_a={3:675})
         self.assertEqual(rows[0]['changes'][8],675)
         self.assertAlmostEqual(rows[0]['changes'][14],3000/675)
@@ -44,7 +63,7 @@ class TotalMetricTests(unittest.TestCase):
 
     def test_public_totals_replace_natural_not_add_paid(self):
         media={'id':'123','permalink':'https://www.instagram.com/reel/ABC/',
-               'total_views_count':26628,'total_like_count':241,
+               'view_count':26628,'total_like_count':241,
                'total_comments_count':295,'shares_count':133,'saved_count':6,
                'organic_insights':{'views':1,'likes':1}}
         rows=metric_plan(sheet(),{'ABC':media})
@@ -55,7 +74,7 @@ class TotalMetricTests(unittest.TestCase):
 
     def test_missing_saved_never_zero_or_stale_interaction(self):
         rows=metric_plan(sheet(),{'ABC':{'id':'123','permalink':'https://instagram.com/reel/ABC/',
-            'total_views_count':1574,'total_like_count':42,'total_comments_count':16,'shares_count':9}})
+            'view_count':1574,'total_like_count':42,'total_comments_count':16,'shares_count':9}})
         self.assertEqual(rows[0]['changes'][9],42)
         self.assertNotIn(8,rows[0]['changes'])
         self.assertNotIn(12,rows[0]['changes'])
@@ -70,19 +89,19 @@ class TotalMetricTests(unittest.TestCase):
 
     def test_exact_post_not_creator_name(self):
         self.assertFalse(verified_media({'id':'1','permalink':'https://instagram.com/reel/OTHER/'},'ABC'))
-        rows=metric_plan(sheet(),{'ABC':{'id':'1','permalink':'https://instagram.com/reel/OTHER/','total_views_count':100}})
+        rows=metric_plan(sheet(),{'ABC':{'id':'1','permalink':'https://instagram.com/reel/OTHER/','view_count':100}})
         self.assertFalse(rows[0]['changes'])
 
     def test_zero_is_real_missing_is_not(self):
         rows=metric_plan(sheet(),{'ABC':{'id':'1','permalink':'https://instagram.com/reel/ABC/',
-            'total_views_count':0,'total_like_count':0,'total_comments_count':0,'shares_count':0,'saved_count':0}})
+            'view_count':0,'total_like_count':0,'total_comments_count':0,'shares_count':0,'saved_count':0}})
         self.assertEqual(rows[0]['changes'][8],0)
         self.assertNotIn(13,rows[0]['changes'])
         self.assertNotIn(14,rows[0]['changes'])
 
     def test_invalid_counter_preserves_old(self):
         rows=metric_plan(sheet(),{'ABC':{'id':'1','permalink':'https://instagram.com/reel/ABC/',
-            'total_views_count':True,'total_like_count':-1}})
+            'view_count':True,'total_like_count':-1}})
         self.assertEqual(rows[0]['changes'],{})
 
     def test_manual_note_preserved_managed_note_cleared(self):
@@ -93,7 +112,7 @@ class TotalMetricTests(unittest.TestCase):
 
     def test_missing_fee_does_not_stop_counters(self):
         values=sheet();values[2][6]=''
-        rows=metric_plan(values,{'ABC':{'id':'1','permalink':'https://instagram.com/reel/ABC/','total_views_count':100}})
+        rows=metric_plan(values,{'ABC':{'id':'1','permalink':'https://instagram.com/reel/ABC/','view_count':100}})
         self.assertEqual(rows[0]['changes'][7],100)
         self.assertNotIn(13,rows[0]['changes'])
         self.assertIn('fee',rows[0]['reason'])
@@ -121,7 +140,7 @@ class TotalMetricTests(unittest.TestCase):
                     after['sheets'][0]['data'][0]['rowData'][region['startRowIndex']]['values'][region['startColumnIndex']]['userEnteredValue']=update['rows'][0]['values'][0]['userEnteredValue']
                 return Reply()
         content={'ABC':{'id':'1','permalink':'https://instagram.com/reel/ABC/',
-                       'total_views_count':200,'total_like_count':10,'total_comments_count':8,'shares_count':7}}
+                       'view_count':200,'total_like_count':10,'total_comments_count':8,'shares_count':7}}
         with tempfile.TemporaryDirectory() as directory, patch('kol_tracker.read_tab',side_effect=[({},native,values),({},after,values)]):
             write_updates(Session(),'endpoint',{'sheetId':0},native,values,metric_plan(values,content),[],Path(directory),True)
         result=after['sheets'][0]['data'][0]['rowData'][2]['values']

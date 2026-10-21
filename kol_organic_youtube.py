@@ -15,7 +15,8 @@ URL = re.compile(r'https?://[^\s<>|]+')
 NOTE = 'Reason for data update failure'
 MANAGED = ('Shares and saves are not available via public YouTube Data API',
            'YouTube API ', 'Video unavailable in YouTube API', 'Missing YouTube ',
-           'Missing numeric KOL fee', 'Missing or unsupported YouTube link')
+           'Missing numeric KOL fee', 'Missing or unsupported YouTube link',
+           'Metrics pending immediate','Immediate update failed','Metrics not available yet')
 
 
 def video_id(link):
