@@ -172,7 +172,7 @@ class MetaRuntimeTests(unittest.TestCase):
             runtime=self.runtime(directory)
             runtime.state['pending']={'organic-views':{'retry_at':0},'organic-meta':{'retry_at':9999999999},'robot':{'retry_at':0}}
             with patch('kol_row_updates.run_kind',return_value=set()) as rows:
-                resume_pending(runtime,{},Path(directory),True)
+                resume_pending(runtime,{'KOL_TRACKER_STATE_DIR':directory},Path(directory),True)
             self.assertEqual(rows.call_count,1)
             self.assertEqual(rows.call_args.args[-1],'organic-meta')
             self.assertNotIn('organic-views',runtime.pending())
