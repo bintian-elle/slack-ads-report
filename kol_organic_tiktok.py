@@ -146,11 +146,15 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
             blocked = True
             blocked_reason = 'TikTok HTTP %s; batch stopped, backoff active' % error.status
             state['videos'][vid]['reason'] = blocked_reason
+            from kol_failures import record_failure
+            record_failure(env,blocked_reason,True,datetime.fromisoformat(state['blocked_until']).timestamp())
             print('Organic TikTok HTTP %s; stopped with persistent backoff' % error.status, flush=True)
         except Exception as error:
             reason = failure_reason(error)
             state['videos'][vid]['reason'] = reason
             skipped.append({'row': number, 'reason': reason})
+            from kol_failures import classify_exception,record_failure
+            record_failure(env,reason,classify_exception(error)[0])
             print('Organic TikTok row %d skipped: %s' % (number,reason),flush=True)
         save_json(path, state)
         if blocked:
@@ -174,6 +178,8 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
                 state['videos'].get(vid,{}).get('reason',
                     'Video data unavailable; existing metrics retained'))
     note_col, notes = note_plan(values,{item['row'] for item in planned},reasons)
+    from kol_failures import record_failure
+    for reason in reasons.values():record_failure(env,reason,'backoff' in reason.lower())
     if note_col >= prop['gridProperties']['columnCount']:
         raise RuntimeError('No unused column for failure reasons; no sheet write')
     save_json(output / 'Organic-TikTok-plan.json', {'planned': planned, 'skipped': skipped,

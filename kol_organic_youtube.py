@@ -91,9 +91,17 @@ def fetch_videos(env, ids):
             r = requests.get('https://www.googleapis.com/youtube/v3/videos', params={
                 'key': env['YOUTUBE_API_KEY'], 'part': 'snippet,statistics',
                 'id': ','.join(ids[start:start+50])}, timeout=45)
-        except requests.RequestException:
+        except requests.RequestException as error:
+            from kol_failures import classify_exception,record_failure
+            record_failure(env,'YouTube API request failed',classify_exception(error)[0])
             raise RuntimeError('YouTube API request failed') from None
         if not r.ok:
+            try:errors=r.json().get('error',{}).get('errors',[])
+            except (ValueError,AttributeError):errors=[]
+            if not isinstance(errors,list):errors=[]
+            if any(e.get('reason') in ('quotaExceeded','dailyLimitExceeded','userRateLimitExceeded','rateLimitExceeded') for e in errors if isinstance(e,dict)):
+                from kol_failures import record_failure
+                record_failure(env,'YouTube quota limit; update deferred',True)
             raise RuntimeError('YouTube API HTTP ' + str(r.status_code))
         for item in r.json().get('items', []):
             result[item['id']] = item
@@ -287,6 +295,9 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
                 if changes.get(5):changes[11]=fee/changes[5]
             else:reason='Missing numeric KOL fee for CPM/CPE'
             if missing:reason='Missing YouTube '+', '.join(missing)+'; existing missing metrics retained'+('; '+reason if reason else '')
+            if missing:
+                from kol_failures import record_failure
+                record_failure(env,reason,False)
         try:
             # Preflight all metric targets so a protected row cannot abort peers.
             for col,val in changes.items():
@@ -299,6 +310,11 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
                 if all(col in changes for col in (4,6,7)):completed.update(row_keys('organic-youtube',v))
         except RuntimeError:
             reason='YouTube API metrics target protected; existing metrics retained'
+            from kol_failures import record_failure
+            record_failure(env,reason,False)
+        if reason and not all(col in changes for col in (4,6,7)):
+            from kol_failures import record_failure
+            record_failure(env,reason)
         old=str(v[note_col]) if len(v)>note_col else ''
         if not old or old.startswith(MANAGED):
             try:add(row,note_col,reason)

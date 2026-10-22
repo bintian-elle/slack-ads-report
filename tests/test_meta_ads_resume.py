@@ -12,7 +12,9 @@ class AdsResumeTests(unittest.TestCase):
         ads=[{'id':'1','effective_status':'ACTIVE'},{'id':'2','effective_status':'ACTIVE'}]
         def pages(session,url,params):
             ids=json.loads(params['filtering'])[0]['value']
-            if ids==['1']:raise RuntimeError('rejected')
+            if ids==['1']:
+                import requests
+                raise requests.Timeout('temporary network failure')
             return [{'ad_id':'2','spend':'5'}]
         with tempfile.TemporaryDirectory() as directory,patch('update_meta_tracker.graph_pages',side_effect=pages):
             runtime=MetaRuntime(directory,'test')

@@ -422,6 +422,8 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
     partial = [{'row':item['row'],'reason':'ROAS and Reach retained: multiple ads cannot be safely aggregated'}
                for item in planned if item['preserve']]
     notes = plan_notes(scope_values(working,'ads-tiktok',target_keys),{item['row'] for item in planned},skipped+partial,0,3)
+    from kol_failures import record_failure
+    for item in skipped+partial:record_failure(env,item['reason'],False)
     save_json(output / 'TikTok-daily-plan.json', {'planned': planned, 'skipped': skipped, 'note_updates':notes, 'window': 'API lifetime through request time'})
     print('TikTok metrics planned: %d; skipped: %d' % (len(planned), len(skipped)), flush=True)
     if not apply or not (planned or notes):
@@ -482,7 +484,7 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-views', 'organic-clean-notes', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'check', 'hold-until-daily'])
+    parser.add_argument('task', choices=['poll', 'daily', 'organic', 'organic-views', 'organic-clean-notes', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'check', 'hold-until-daily', 'clean-retries'])
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--creators', nargs='+', help='Organic Meta only: exact Creator names for a focused verification/update')
     args = parser.parse_args()
@@ -495,15 +497,19 @@ def main():
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            if args.task not in ['daily', 'organic', 'organic-views', 'organic-clean-notes', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll']:
+            if args.task not in ['daily', 'organic', 'organic-views', 'organic-clean-notes', 'organic-meta-poll', 'organic-tiktok', 'organic-youtube', 'youtube-poll', 'clean-retries']:
                 print('Another tracker task is running; skipped', flush=True); return
             print('Another tracker task is running; daily update queued', flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
-        if args.apply:
+        if args.apply and args.task!='clean-retries':
             from kol_run_audit import prune_logs
             prune_logs(state_dir)
         output = state_dir / 'runs' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
         output.mkdir(parents=True)
+        if args.task=='clean-retries':
+            from kol_retry_migration import migrate
+            print(json.dumps(migrate(state_dir,apply=args.apply)),flush=True)
+            return
         from kol_row_updates import metrics_allowed,hold_until_daily,run_kind
         if args.task=='hold-until-daily':
             if not args.apply:raise RuntimeError('Use --apply to set the KOL metric hold')

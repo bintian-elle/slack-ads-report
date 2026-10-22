@@ -174,7 +174,10 @@ def fetch_ad_interactions(env, content, cache_path=None):
         except (RuntimeError,requests.RequestException) as error:
             if isinstance(error,MetaDeferred):break
             runtime=env.get('_KOL_META_RUNTIME')
-            if runtime:runtime.defer('Meta paid interaction incomplete; queued for retry',1800)
+            from kol_failures import classify_exception,record_failure
+            retryable,reason=classify_exception(error)
+            record_failure(env,reason,retryable)
+            if runtime and retryable:runtime.defer(reason,1800)
             continue
         totals[aid] = total
         cached[aid] = {'value': total, 'since': starts[aid], 'fetched_on': cutoff,

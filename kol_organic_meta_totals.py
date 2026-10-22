@@ -143,9 +143,12 @@ def method_a_values(env,values,output,cache_path,natural_out=None):
         except MetaDeferred as error:status='deferred';reason=deferred=str(error)
         except (RuntimeError,requests.RequestException) as error:
             status='failed'
-            http=re.search(r'HTTP \d{3}',str(error));reason=http.group() if http else 'API request or response validation failed'
             runtime=env.get('_KOL_META_RUNTIME')
-            if runtime:runtime.defer('Engagement request failed; queued for retry',1800)
+            from kol_failures import classify_exception,record_failure
+            retryable,detail=classify_exception(error)
+            reason=detail
+            record_failure(env,detail,retryable)
+            if runtime and retryable:runtime.defer(detail,1800)
         for link in batch:
             key=post_key(link)
             natural[key]=found.get(key,{'_fetch_status':status,'_reason':reason,'permalink':link})
@@ -155,6 +158,9 @@ def method_a_values(env,values,output,cache_path,natural_out=None):
     if actual:
         try:_,paid=fetch_ad_interactions(env,actual,cache_path)
         except (RuntimeError,requests.RequestException) as error:
+            from kol_failures import classify_exception,record_failure
+            retryable,detail=classify_exception(error)
+            record_failure(env,detail,retryable)
             if isinstance(error,MetaDeferred):
                 for item in actual.values():item.update(_paid_status='deferred',_paid_reason=str(error))
             print('Organic Meta paid Interaction unavailable; existing Interaction/CPE retained',flush=True)
@@ -504,5 +510,9 @@ def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
     statuses=[x for x in statuses if x['row'] in selected_rows]
     print('Organic Meta totals planned: %d rows; %d status changes'%(len(planned),len(statuses)),flush=True)
     write_updates(session,endpoint,prop,native,values,planned,codes+media_codes+statuses,output,apply)
+    from kol_failures import record_failure
+    for item in planned:
+        if not all(col in item['changes'] for col in (7,8,9,10,11)) or 'target protected' in item['reason']:
+            record_failure(env,item['reason'] or 'Required post counters unavailable; existing values retained')
     if apply:save_json(state_path,{'posts':registry})
     return completed_metric_keys(planned,values,link_aliases)

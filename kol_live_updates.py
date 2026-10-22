@@ -132,12 +132,17 @@ def enqueue_jobs(state,events,now):
             primary=next(iter(sorted(k for k in keys if not k.startswith(('igcode:','ttcode:')))),next(iter(sorted(keys))))
             job_id=kind+'|'+primary
             if job_id in done:continue
+            unavailable=state.setdefault('unavailable',{})
+            old=unavailable.get(job_id)
+            if old and all(old.get(k)==event.get(k) for k in ('post_link','ad_code','creator','platform')):continue
+            if old:unavailable.pop(job_id)
             if job_id not in jobs:
                 jobs[job_id]=dict(event,kind=kind,retry_at=now,attempts=0)
             elif not jobs[job_id].get('ad_code') and event.get('ad_code'):
                 jobs[job_id]['ad_code']=event['ad_code'];jobs[job_id]['retry_at']=now
 
 def dispatch_jobs(state,handlers,insert,save,now,on_failure=None,metric_not_before=0):
+    from kol_failures import RowResult
     save()  # Persist jobs before any insertion/metric side effects.
     jobs=state.setdefault('jobs',{});completed=state.setdefault('completed',{})
     for kind in ('organic-youtube','organic-tiktok','organic-meta','ads-meta','ads-tiktok'):
@@ -146,27 +151,39 @@ def dispatch_jobs(state,handlers,insert,save,now,on_failure=None,metric_not_befo
         failed=[]
         for key,job in pending.items():
             reason='Metrics not available yet; existing values retained'
+            retryable=False;unavailable={}
             try:
                 insert(kind,[job])
                 if now<metric_not_before:
                     job['retry_at']=metric_not_before
                     job['reason']='Metrics deferred until scheduled daily update'
                     save();continue
-                success=handlers[kind]([job]) or set()
+                result=handlers[kind]([job])
+                success=result if result is not None else set()
+                unavailable=getattr(result,'unavailable',{})
+                if matches_keys(job_keys(kind,job,state.get('link_aliases')),set(unavailable)):
+                    reason=next((v for k,v in unavailable.items() if k in job_keys(kind,job,state.get('link_aliases'))),reason)
+                elif not matches_keys(job_keys(kind,job,state.get('link_aliases')),success):
+                    # Unattempted work (budget/backoff) has no terminal outcome.
+                    retryable=isinstance(result,RowResult)
             except Exception as error:
                 success=getattr(error,'successful_keys',set())
-                reason='Immediate update failed ('+type(error).__name__+'); existing values retained'
+                from kol_failures import classify_exception
+                retryable,reason=classify_exception(error)
             if matches_keys(job_keys(kind,job,state.get('link_aliases')),success):
                 completed[key]=now;jobs.pop(key,None)
-            else:
+            elif retryable:
                 job['attempts']=job.get('attempts',0)+1
                 job['retry_at']=now+(300 if job['attempts']<=6 else 3600)
                 job['reason']=reason;failed.append(job)
+            else:
+                state.setdefault('unavailable',{})[key]=dict(job,reason=reason,observed_at=now,retry_at=0)
+                jobs.pop(key,None)
+            if reason and not matches_keys(job_keys(kind,job,state.get('link_aliases')),success) and on_failure:
+                try:on_failure(kind,[job],reason)
+                except Exception:print('Immediate '+kind+' reason target unavailable',flush=True)
             save()  # A later rejected row cannot replay verified predecessors.
-        if failed and on_failure:
-            try:on_failure(kind,failed,reason)
-            except Exception:print('Immediate '+kind+' reason target unavailable; queued for retry',flush=True)
-        print('Immediate %s: %d complete; %d pending'%(kind,len(pending)-len(failed),len(failed)),flush=True)
+        print('Immediate %s: %d pending; unavailable outcomes retained separately'%(kind,len(failed)),flush=True)
         save()
 
 def slack_snapshot(env,state,now):

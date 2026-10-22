@@ -12,7 +12,9 @@ class RowQueueTests(unittest.TestCase):
             rows=[{'key':'ig:A','row':3,'status':'ACTIVE'}, {'key':'ig:B','row':4,'status':None}]
             def writer(item):
                 calls.append(item['key'])
-                if item['key']=='ig:B':raise RuntimeError('temporary write failure')
+                if item['key']=='ig:B':
+                    import requests
+                    raise requests.Timeout('temporary write failure')
                 return True
             q.run(rows,writer)
             self.assertEqual(calls,['ig:A','ig:B'])
@@ -78,7 +80,8 @@ class RowQueueTests(unittest.TestCase):
             q=RowQueue(Path(directory)/'rows.json','sheet/tab',now=lambda:1792648800)
             q.run([{'key':'a','status':'PAUSED'}],lambda _:True)
             q.run([{'key':'a','status':'ACTIVE'}],lambda _:False)
-            self.assertEqual(q.remaining,1)
+            self.assertEqual(q.remaining,0)
+            self.assertEqual(q.state['rows']['a']['unavailable_cycle'],'2026-10-22')
             self.assertNotIn('cycle',q.state['rows']['a'])
 
     def test_live_dispatch_finishes_one_post_before_inserting_next(self):

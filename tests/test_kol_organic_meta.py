@@ -19,7 +19,8 @@ class OrganicTests(unittest.TestCase):
         ad={'id':'1','effective_status':'ACTIVE','created_time':'2026-01-01T12:00:00+0000','creative':{'source_instagram_media_id':'123'}}
         def pages(session,url,params):
             if url.endswith('/ads'):return [ad]
-            raise RuntimeError('rejected')
+            import requests
+            raise requests.Timeout('temporary network failure')
         with tempfile.TemporaryDirectory() as directory,patch('sync_creator_tracker.get_json',return_value={'timezone_name':'America/Chicago'}),patch('sync_creator_tracker.graph_pages',side_effect=pages):
             runtime=MetaRuntime(directory,'test')
             with runtime.stage('organic-meta'):

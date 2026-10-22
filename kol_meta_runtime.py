@@ -53,6 +53,7 @@ class MetaRuntime:
         self.lock=threading.RLock();self.current='poll';self.resuming=False;self.sent=0;self.hits=0;self.deferred=set()
         self.current_lane=None;self.lane_sent={};self.lane_limits={}
         self.rotation_started=False
+        self.current_report=None
         try:self.state=json.loads(self.path.read_text())
         except (OSError,ValueError):self.state={}
         if self.state.get('token')!=self.token_hash:self.state={}
@@ -77,6 +78,12 @@ class MetaRuntime:
         finally:self.current,self.resuming=previous
 
     @contextmanager
+    def row_context(self,report):
+        previous=self.current_report;self.current_report=report
+        try:yield
+        finally:self.current_report=previous
+
+    @contextmanager
     def lane(self,name,budget=5):
         previous=self.current_lane;self.current_lane=name
         self.lane_limits[name]=max(1,int(budget));self.lane_sent.setdefault(name,0)
@@ -93,6 +100,7 @@ class MetaRuntime:
         return [k for k,v in self.state['pending'].items() if not due or v.get('retry_at',0)<=self.now()]
 
     def defer(self,reason,seconds=3600):
+        if self.current_report is not None:self.current_report.record(reason,True,self.now()+seconds)
         self.deferred.add(self.current)
         self.state['pending'][self.current]={'retry_at':self.now()+seconds,'reason':reason}
         self.save()
@@ -187,12 +195,14 @@ class MetaRuntime:
                 until=next_boundary(self.now())
                 inventory=path.endswith('/ads') or ('fields' in query and 'business_discovery' not in query['fields'] and 'media' not in path and 'insights' not in path and 'organic_insights' not in query['fields'])
                 self.state['cache'][key]={'data':clean_data(data),'until':until,'fresh_until':min(until,self.now()+900) if inventory else until}
-            elif result.status_code>=500:
+            elif result.status_code>=500 and code not in (100,110,190,200):
                 reason='Meta temporary HTTP %d; queued for retry'%result.status_code
                 self.state['cache'][key]={'failure':reason,'until':self.now()+1800}
                 self.defer(reason,1800)
                 raise MetaDeferred(reason)
-            elif result.status_code in (400,401,403,404):
+            elif result.status_code in (400,401,403,404) or code in (100,110,190,200):
+                if self.current_report is not None:
+                    self.current_report.record('Meta HTTP %s / Meta code %s; check post identity or authorization'%(result.status_code,code or 'unknown'))
                 # Stable authorization/identity failures must not consume every
                 # continuation batch ahead of posts that can succeed.
                 self.state['cache'][key]={'data':clean_data(data),'status':result.status_code,'until':self.now()+21600}
@@ -203,13 +213,20 @@ class MetaRuntime:
 
 def run_stage(runtime,name,action,resume=False):
     with runtime.stage(name,resume=resume):
+        runtime.deferred.discard(name)
         # Persist before side effects: SIGTERM/power loss cannot silently lose
         # a stage that has already consumed quota and saved response pages.
         runtime.state['pending'][name]={'retry_at':runtime.now()+300,'reason':'Meta stage in progress; resume after interruption'}
         runtime.save()
         try:result=action()
-        except (RuntimeError,requests.RequestException):
-            if name not in runtime.deferred:runtime.defer('Meta stage incomplete; queued for retry',1800)
+        except Exception as error:
+            from kol_failures import classify_exception
+            retryable,reason=classify_exception(error)
+            if retryable and name not in runtime.deferred:runtime.defer(reason,1800)
+            if not retryable:
+                runtime.state['pending'].pop(name,None)
+                runtime.state.setdefault('unavailable_stages',{})[name]={'reason':reason,'cycle':reporting_window(runtime.now())}
+                runtime.save()
             raise
         runtime.complete(name)
         return result

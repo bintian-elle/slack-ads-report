@@ -112,8 +112,11 @@ def resumable_insights(session,base,account,ads,bound,start,end,cache_path,batch
                 'filtering':json.dumps([{'field':'ad.id','operator':'IN','value':[aid for aid,_ in batch]}]),
                 'use_unified_attribution_setting':'true','limit':100})
             except MetaDeferred:return result,complete
-            except (RuntimeError,requests.RequestException):
-                if runtime:runtime.defer('Meta Ads Insights group incomplete; queued for retry',1800)
+            except (RuntimeError,requests.RequestException) as error:
+                from kol_failures import classify_exception,record_failure
+                retryable,reason=classify_exception(error)
+                if runtime and runtime.current_report is not None:runtime.current_report.record(reason,retryable)
+                if runtime and retryable:runtime.defer(reason,1800)
                 continue
             for aid,pause in batch:
                 data=[row for row in rows if row['ad_id']==aid]
@@ -258,6 +261,8 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
     partial = [{'row':item['row'],'reason':'Metric unavailable: '+', '.join(unavailable_metrics(item['metrics']))}
         for item in updated if unavailable_metrics(item['metrics'])]
     notes = plan_notes(scope_values(raw,'ads-meta',target_keys,link_aliases),{item['row'] for item in updated},skips+partial,1,3)
+    from kol_failures import record_failure
+    for item in skips+partial:record_failure(env,item['reason'])
     for item in notes:
         for col,value in item['changes'].items():
             target = block[item['row']-1].get('values',[])

@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from kol_meta_runtime import MetaDeferred, next_boundary, reporting_window
+from kol_failures import Outcome,RowReport,RowResult,classify_exception
 
 
 def root_path(env):
@@ -52,11 +53,17 @@ class RowQueue:
             old.update(attempt_cycle=self.cycle,retry_at=0,attempts=0)
         status=item.get('status');paused=status in ('PAUSED','ADSET_PAUSED','CAMPAIGN_PAUSED')
         changed=old.get('observed_status')!=status
-        if changed:old.pop('cycle',None)
+        fingerprint=item.get('fingerprint')
+        input_changed=bool(fingerprint and old.get('fingerprint') and old['fingerprint']!=fingerprint)
+        if fingerprint:old['fingerprint']=fingerprint
+        if input_changed:
+            old.pop('unavailable_cycle',None);old.pop('cycle',None);old['retry_at']=0
         old['observed_status']=status
         if paused:
             old.setdefault('paused_since',self.today.isoformat())
         else:old.pop('paused_since',None)
+        if old.get('unavailable_cycle')==self.cycle:return None
+        if changed:old.pop('cycle',None)
         if not changed and old.get('cycle')==self.cycle:return None
         if old.get('retry_at',0)>self.now() and not changed:return None
         age=(self.today-datetime.fromisoformat(old['paused_since']).date()).days if paused else 0
@@ -67,6 +74,19 @@ class RowQueue:
         return priority
 
     def run(self,items,writer,stop=None,limit=20):
+        # One post can appear on more than one physical sheet row. Merge before
+        # preparing state so conflicting row statuses cannot reset its backoff.
+        groups={}
+        for item in items:groups.setdefault(item['key'],[]).append(item)
+        merged=[]
+        for group in groups.values():
+            item=dict(min(group,key=lambda x:x.get('row',0)))
+            statuses={x.get('status') for x in group}
+            item['status']='ACTIVE' if 'ACTIVE' in statuses else 'PAUSED' if statuses and statuses<={'PAUSED','ADSET_PAUSED','CAMPAIGN_PAUSED'} else None
+            if any(x.get('fingerprint') for x in group):
+                item['fingerprint']=hashlib.sha256(json.dumps(sorted(x.get('fingerprint','') for x in group)).encode()).hexdigest() if len(group)>1 else group[0].get('fingerprint')
+            merged.append(item)
+        items=merged
         work=[]
         for item in items:
             rank=self.prepare(item)
@@ -77,20 +97,28 @@ class RowQueue:
             entry=self.state['rows'][item['key']]
             entry.update(inflight=True,row=item.get('row'),retry_at=self.now()+300)
             self.save()  # Crash before readback cannot advance completion.
-            try:success=bool(writer(item))
-            except MetaDeferred:
-                entry.update(inflight=False,retry_at=self.now()+3600)
-                self.save();break
-            except (RuntimeError,requests.RequestException,ValueError):success=False
-            entry['attempts']=0 if success else entry.get('attempts',0)+1
-            entry.update(inflight=False,retry_at=0 if success else self.now()+(1800 if entry['attempts']<=6 else 21600))
-            if success:
+            stop_after=False
+            try:
+                result=writer(item)
+                outcome=result if isinstance(result,Outcome) else Outcome(success=bool(result))
+            except Exception as error:
+                retryable,reason=classify_exception(error)
+                outcome=Outcome(reason=reason,retryable=retryable,retry_at=getattr(error,'retry_at',0))
+                stop_after=isinstance(error,MetaDeferred)
+            entry['attempts']=0 if outcome.success else entry.get('attempts',0)+1
+            entry.update(inflight=False,retryable=outcome.retryable,reason='' if outcome.success else outcome.reason)
+            entry['retry_at']=(outcome.retry_at if outcome.retry_at>self.now() else self.now()+1800) if outcome.retryable and not outcome.success else 0
+            if outcome.success:
                 entry.update(cycle=self.cycle,fetched_on=self.today.isoformat())
+                entry.pop('unavailable_cycle',None)
                 completed.add(item['key'])
+            elif not outcome.retryable:entry['unavailable_cycle']=self.cycle
             self.save()
-            print('KOL row %s: %s'%(item.get('row','?'),'verified' if success else 'pending retry'),flush=True)
+            print('KOL row %s: %s'%(item.get('row','?'),'verified' if outcome.success else 'pending retry' if outcome.retryable else 'unavailable this cycle: '+outcome.reason),flush=True)
+            if stop_after:break
         # Includes rows temporarily backed off, not merely this invocation's work.
         self.remaining=sum(1 for item in items if self.state['rows'][item['key']].get('cycle')!=self.cycle
+            and self.state['rows'][item['key']].get('unavailable_cycle')!=self.cycle
             and not (item.get('status') in ('PAUSED','ADSET_PAUSED','CAMPAIGN_PAUSED')
                      and self.state['rows'][item['key']].get('fetched_on')
                      and (self.today-datetime.fromisoformat(self.state['rows'][item['key']]['paused_since']).date()).days>=7
@@ -138,23 +166,28 @@ def run_rows(env,output,apply,kind,writer,target_keys=None,link_aliases=None):
     from kol_targeting import START,row_keys,load_link_aliases,matches_keys
     runtime=env.get('_KOL_META_RUNTIME')
     if not metrics_allowed(env):
-        print('KOL metrics held until next daily boundary',flush=True);return set()
+        print('KOL metrics held until next daily boundary',flush=True);return RowResult()
     if runtime and kind in ('ads-meta','organic-meta') and runtime.state.get('blocked_until',0)>runtime.now():
         runtime.defer(runtime.state.get('blocked_reason','Meta cooldown'),runtime.state['blocked_until']-runtime.now())
-        return set()
+        return RowResult()
+    discovery_retry=False
     if kind=='organic-meta' and target_keys is None:
         from kol_organic_discovery import run as discover
         try:discover(env,output,apply)
-        except (RuntimeError,requests.RequestException):
-            if runtime:runtime.defer('Organic discovery pending; queued for retry',1800)
+        except (RuntimeError,requests.RequestException) as error:
+            retryable,reason=classify_exception(error)
+            discovery_retry=retryable
+            if runtime and retryable:runtime.defer(reason,1800)
     _,endpoint,_,_,values=open_tab(env,kind)
     aliases=load_link_aliases(env) if link_aliases is None else link_aliases
     statuses={}
     if kind in ('ads-meta','organic-meta'):
         from kol_organic_meta_totals import ad_inventory
         try:statuses=api_statuses(env,kind,values,ad_inventory(env))
-        except (RuntimeError,requests.RequestException):
-            if runtime and (runtime.sent>=runtime.budget or runtime.state.get('blocked_until',0)>runtime.now()):return set()
+        except (RuntimeError,requests.RequestException) as error:
+            retryable,reason=classify_exception(error)
+            if runtime and retryable:runtime.defer(reason,1800)
+            if runtime and (runtime.sent>=runtime.budget or runtime.state.get('blocked_until',0)>runtime.now()):return RowResult()
     if kind=='ads-tiktok':
         from kol_tracker import fetch_ad_details,fetch_report,tiktok_bindings
         # Shared account reports are fetched once, never once per row.
@@ -174,7 +207,9 @@ def run_rows(env,output,apply,kind,writer,target_keys=None,link_aliases=None):
         # No usable identity must never silently expand to the whole sheet.
         if not keys:continue
         primary=sorted(k for k in keys if not k.startswith(('igcode:','ttcode:'))) or sorted(keys)
-        items.append({'key':primary[0],'row':n,'keys':keys,'status':statuses.get(n)})
+        columns={'ads-meta':(1,6,7),'ads-tiktok':(0,2,3,13),'organic-meta':(0,3,4,17),'organic-tiktok':(0,2),'organic-youtube':(0,2)}[kind]
+        fingerprint=hashlib.sha256(json.dumps([row[c] if len(row)>c else '' for c in columns],sort_keys=True).encode()).hexdigest()
+        items.append({'key':primary[0],'row':n,'keys':keys,'status':statuses.get(n),'fingerprint':fingerprint})
     scope=endpoint+'|'+kind
     digest=hashlib.sha256(scope.encode()).hexdigest()[:16]
     queue=RowQueue(root_path(env)/('row-progress-'+digest+'.json'),scope,persist=apply)
@@ -185,13 +220,22 @@ def run_rows(env,output,apply,kind,writer,target_keys=None,link_aliases=None):
         # to stay below per-user Sheets quotas and TikTok's public-read cadence.
         if apply:time.sleep(7)
         # Same request pages can be reused within the current reporting window.
-        if runtime:
-            with runtime.stage(runtime.current,resume=True):
-                result=writer(dict(env,_KOL_ROW_MODE=True,_KOL_LIVE_METRICS=target_keys is not None),target,apply,target_keys=item['keys'],link_aliases=aliases) or set()
-        else:result=writer(dict(env,_KOL_ROW_MODE=True,_KOL_LIVE_METRICS=target_keys is not None),target,apply,target_keys=item['keys'],link_aliases=aliases) or set()
-        done=matches_keys(item['keys'],result)
+        report=RowReport()
+        row_env=dict(env,_KOL_ROW_MODE=True,_KOL_LIVE_METRICS=target_keys is not None,_KOL_ROW_REPORT=report)
+        try:
+            if runtime:
+                with runtime.stage(runtime.current,resume=True),runtime.row_context(report):
+                    result=writer(row_env,target,apply,target_keys=item['keys'],link_aliases=aliases) or set()
+            else:result=writer(row_env,target,apply,target_keys=item['keys'],link_aliases=aliases) or set()
+        except MetaDeferred as error:
+            error.retry_at=report.retry_at
+            raise
+        except Exception as error:
+            retryable,reason=classify_exception(error);report.record(reason,retryable)
+            return Outcome(False,'; '.join(report.reasons),report.retryable,report.retry_at)
+        done=matches_keys(item['keys'],result) and not report.incomplete
         if done:success.update(item['keys'])
-        return done
+        return Outcome(done,'; '.join(report.reasons) or 'No usable metrics returned; existing values retained',report.retryable,report.retry_at)
     def stopped():
         return bool(runtime and kind in ('ads-meta','organic-meta') and
                     (runtime.sent>=runtime.budget or runtime.state.get('blocked_until',0)>runtime.now()
@@ -203,9 +247,16 @@ def run_rows(env,output,apply,kind,writer,target_keys=None,link_aliases=None):
             runtime.defer('KOL row queue incomplete; continue unverified rows',300)
         elif runtime.current not in runtime.deferred:
             runtime.defer(pending.get('reason','Meta cooldown'),runtime.state['blocked_until']-runtime.now())
+    elif runtime and not discovery_retry:
+        runtime.deferred.discard(runtime.current)
+        runtime.state['pending'].pop(runtime.current,None)
+        runtime.save()
+    unavailable={}
     for item in items:
         if queue.state['rows'][item['key']].get('cycle')==queue.cycle:success.update(item['keys'])
-    return success
+        if queue.state['rows'][item['key']].get('unavailable_cycle')==queue.cycle:
+            unavailable.update({key:queue.state['rows'][item['key']]['reason'] for key in item['keys']})
+    return RowResult(success,unavailable)
 
 
 def run_kind(env,output,apply,kind):

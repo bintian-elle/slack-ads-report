@@ -25,7 +25,9 @@ class LiveTests(unittest.TestCase):
         state={};enqueue_jobs(state,[event],100)
         handlers={k:lambda jobs:{'ig:OLD','igcode:Q9jTShared'} for k in ('ads-meta','organic-meta')}
         dispatch_jobs(state,handlers,lambda *a:None,lambda:None,100)
-        self.assertEqual(len(state['jobs']),2)
+        self.assertFalse(state['jobs'])
+        self.assertEqual(len(state['unavailable']),2)
+        self.assertFalse(state['completed'])
 
     def test_platforms_do_not_cross_creators(self):
         text="[KOL Content is Live]\n1. hannnahmitchelll's content is live\nTikTok: https://www.tiktok.com/@hannahhlyyn/video/7698432185451302175\n#"+'a'*40+"\n2. nutritionbyanastasiia's content is live\nIG: https://instagram.com/p/DeregCnx1U8/\nQ9jTNutrition\nYT: https://youtube.com/shorts/m3voSsAfZQw"
@@ -66,7 +68,9 @@ class LiveTests(unittest.TestCase):
         enqueue_jobs(state,events,100);saved=[];inserted=set();inserts=[]
         def insert(kind,jobs):
             if kind not in inserted:inserted.add(kind);inserts.append(kind)
-        def fail(jobs):raise RuntimeError('private credentials must not be logged')
+        def fail(jobs):
+            import requests
+            raise requests.Timeout('private credentials must not be logged')
         dispatch_jobs(state,{'organic-meta':fail,'organic-youtube':lambda jobs:{'yt:m3voSsAfZQw'}},insert,
                       lambda:saved.append(json.loads(json.dumps(state))),100)
         self.assertEqual(len(state['jobs']),1)
@@ -102,4 +106,5 @@ class LiveTests(unittest.TestCase):
         def insert(kind,jobs):
             if any(x['creator']=='bad' for x in jobs):raise RuntimeError('protected row')
         dispatch_jobs(state,{'organic-youtube':lambda jobs:{'yt:m3voSsAfZQw'}},insert,lambda:None,100)
-        self.assertEqual([x['creator'] for x in state['jobs'].values()],['bad'])
+        self.assertFalse(state['jobs'])
+        self.assertEqual([x['creator'] for x in state['unavailable'].values()],['bad'])
