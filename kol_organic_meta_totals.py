@@ -415,10 +415,9 @@ def write_updates(session, endpoint, prop, native, values, planned, other, outpu
     save_json(output/'Organic-Meta-Totals-plan.json',{'basis':'Public lifetime counters; Method A Interaction/CPE',
               'successful_rows':successful,'planned':planned,'auxiliary_updates':other})
     if not apply or not body:return
-    save_json(output/'Organic-Meta-Totals-before.json',native)
     if read_tab(session,endpoint,'Meta-IG')[1]!=native:raise RuntimeError('Organic sheet changed; no write')
     session.post(endpoint+':batchUpdate',json={'requests':body},timeout=90).raise_for_status()
-    after=read_tab(session,endpoint,'Meta-IG')[1];save_json(output/'Organic-Meta-Totals-after.json',after)
+    after=read_tab(session,endpoint,'Meta-IG')[1]
     for obj in (expected,after):
         for row in obj['sheets'][0]['data'][0]['rowData']:
             for cell in row.get('values',[]):cell.pop('effectiveValue',None)

@@ -514,13 +514,11 @@ def run(env, output, apply):
     expected_header = expected_rows[0].setdefault('values', [])
     expected_header.extend({} for _ in range(max(0, 6-len(expected_header))))
     expected_header[5]['userEnteredValue'] = request['updateCells']['rows'][0]['values'][0]['userEnteredValue']
-    save_json(output / 'Organic-Meta-before.json', native)
     if read_tab(session, endpoint, 'Meta-IG')[1] != native:
         raise RuntimeError('Organic sheet changed; no write')
     response = session.post(endpoint + ':batchUpdate', json={'requests': body}, timeout=90)
     response.raise_for_status()
     after = read_tab(session, endpoint, 'Meta-IG')[1]
-    save_json(output / 'Organic-Meta-after.json', after)
     for obj in [expected, after]:
         for row in obj['sheets'][0]['data'][0]['rowData']:
             for cell in row.get('values', []):

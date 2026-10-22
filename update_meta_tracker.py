@@ -270,8 +270,8 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
     else:header=raw[0][9]
     plan={'fetched_at':now.isoformat(),'cutoff':end,'account':info,'new_row':new_number,'updated_rows':updated,'location_changes':location_changes,'skipped':skips,'note_updates':notes,'shared_ads':conflicts,'j1':header,'requests':requests_body}
     stamp=now.strftime('%Y%m%dT%H%M%S')
-    (output/(stamp+'-before.json')).write_text(json.dumps({'sheet':before,'grid':grid},ensure_ascii=False,indent=2))
-    (output/(stamp+'-plan.json')).write_text(json.dumps(plan,ensure_ascii=False,indent=2))
+    from kol_tracker import save_json
+    save_json(output/(stamp+'-plan.json'),plan)
     print(json.dumps({k:plan[k] for k in ['cutoff','new_row','skipped','shared_ads','j1']},ensure_ascii=False),flush=True)
     print('Planned metric rows:',len(updated),flush=True)
     if not apply: return set().union(*(row_keys('ads-meta',raw[item['row']-1],link_aliases) for item in updated))
@@ -321,7 +321,6 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
         for col,value in item['changes'].items():
             row=after['values'][item['row']-1]
             if (row[col] if col<len(row) else '')!=value: raise RuntimeError('Failure reason verification failed')
-    (output/(stamp+'-after.json')).write_text(json.dumps(after,ensure_ascii=False,indent=2))
     print('APPLIED AND VERIFIED',len(updated),'metric rows; new row',new_number,flush=True)
     return set().union(*(row_keys('ads-meta',raw[item['row']-1],link_aliases) for item in updated))
 

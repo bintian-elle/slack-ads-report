@@ -213,12 +213,10 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
         add(1,4,'Views\n[%s update]' % datetime.now(ZoneInfo('America/Chicago')).strftime('%m/%d'))
     if not body:
         return
-    save_json(output / 'Organic-TikTok-before.json', native)
     if read_tab(session,endpoint,'TikTok',validate_tracker=False)[1] != native:
         raise RuntimeError('Organic TikTok sheet changed; no write')
     session.post(endpoint + ':batchUpdate',json={'requests':body},timeout=90).raise_for_status()
     after = read_tab(session,endpoint,'TikTok',validate_tracker=False)[1]
-    save_json(output / 'Organic-TikTok-after.json',after)
     for obj in (expected_native,after):
         for row in obj['sheets'][0]['data'][0]['rowData']:
             for cell in row.get('values',[]):

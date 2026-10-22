@@ -111,12 +111,10 @@ def commit(session, endpoint, prop, native, body, expected, output, label):
     from kol_tracker import read_tab, save_json
     if not body:
         return
-    save_json(output / (label+'-before.json'), native)
     if read_tab(session, endpoint, 'YTB', False)[1] != native:
         raise RuntimeError('Organic YTB changed before write')
     session.post(endpoint+':batchUpdate', json={'requests':body}, timeout=90).raise_for_status()
     after = read_tab(session, endpoint, 'YTB', False)[1]
-    save_json(output / (label+'-after.json'), after)
     rows = after['sheets'][0]['data'][0]['rowData']
     for (row,col), value in expected.items():
         got = rows[row-1].get('values', [])

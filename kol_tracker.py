@@ -30,6 +30,8 @@ CHICAGO = ZoneInfo('America/Chicago')
 
 def save_json(path, value):
     """Private atomic state writes; a failed run never advances its cursor."""
+    from kol_run_audit import run_artifact,summary
+    if run_artifact(path):value=summary(value)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix='.tracker-')
     try:
@@ -260,7 +262,6 @@ def insert_rows(session, endpoint, platform, prop, native, values, proposed, out
             requests_body.append({'copyPaste': {'source': source, 'destination': dest, 'pasteType': kind}})
         requests_body.append(write_range(prop['sheetId'], edge + 1, 0, row))
         inserted.append((edge, row))
-    save_json(output / (platform + '-insert-before.json'), native)
     if not apply:
         print(platform + ': proposed new rows ' + str(len(proposed)), flush=True); return len(proposed)
     if read_tab(session, endpoint, platform)[1] != native:
@@ -292,7 +293,6 @@ def insert_rows(session, endpoint, platform, prop, native, values, proposed, out
                     a.pop('userEnteredValue'); b.pop('userEnteredValue')
                 if a != b:
                     raise RuntimeError('Existing native row changed; do not replay')
-    save_json(output / (platform + '-insert-after.json'), after)
     print(platform + ': inserted and verified ' + str(len(proposed)), flush=True)
     return len(proposed)
 
@@ -463,7 +463,6 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
         row[col]['userEnteredValue'] = update['rows'][0]['values'][0].get('userEnteredValue', {})
         if not row[col]['userEnteredValue']:
             row[col].pop('userEnteredValue')
-    save_json(output / 'TikTok-daily-before.json', native)
     if read_tab(session, endpoint, 'TikTok')[1] != native:
         raise RuntimeError('Sheet changed; no daily write')
     response = session.post(endpoint + ':batchUpdate', json={'requests': body}, timeout=90)
@@ -475,7 +474,6 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
                 cell.pop('effectiveValue', None)
             while row.get('values') and not row['values'][-1]:
                 row['values'].pop()
-    save_json(output / 'TikTok-daily-after.json', after)
     if expected != after:
         raise RuntimeError('Daily native readback failed; inspect backup')
     print('TikTok daily metrics and bindings verified', flush=True)
@@ -501,6 +499,9 @@ def main():
                 print('Another tracker task is running; skipped', flush=True); return
             print('Another tracker task is running; daily update queued', flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
+        if args.apply:
+            from kol_run_audit import prune_logs
+            prune_logs(state_dir)
         output = state_dir / 'runs' / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
         output.mkdir(parents=True)
         from kol_row_updates import metrics_allowed,hold_until_daily,run_kind

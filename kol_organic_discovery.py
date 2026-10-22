@@ -203,12 +203,10 @@ def insert_additions(env,output,apply,prop,native,values,additions,pending=()):
             if new_cells[col].get('dataValidation'):
                 raise RuntimeError('Constrained new identity cell')
             body.append(write_range(prop['sheetId'],index+1,col,[value]))
-    save_json(output/'Organic-Meta-discovery-before.json',native)
     if read_tab(session,endpoint,'Meta-IG')[1]!=native:
         raise RuntimeError('Organic changed during discovery; no insert')
     session.post(endpoint+':batchUpdate',json={'requests':body},timeout=90).raise_for_status()
     _,after,actual = read_tab(session,endpoint,'Meta-IG')
-    save_json(output/'Organic-Meta-discovery-after.json',after)
     for offset,(original_index,item) in enumerate(positions):
         index=original_index+offset
         item['row']=index+1

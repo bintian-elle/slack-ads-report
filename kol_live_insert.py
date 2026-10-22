@@ -156,12 +156,10 @@ def simple_organic_insert(session,endpoint,prop,native,values,kind,additions,out
             value='=SUM(%s2:%s%d)'%(match.group(1),match.group(1),index+count)
             body.append({'updateCells':{'range':{'sheetId':sid,'startRowIndex':index+count,'endRowIndex':index+count+1,'startColumnIndex':col,'endColumnIndex':col+1},
                 'rows':[{'values':[{'userEnteredValue':{'formulaValue':value}}]}],'fields':'userEnteredValue'}})
-    save_json(output/(kind+'-insert-before.json'),native)
     if not apply:return body
     if read_tab(session,endpoint,TABS[kind],False)[1]!=native:raise RuntimeError('Organic changed; no insert')
     session.post(endpoint+':batchUpdate',json={'requests':body},timeout=90).raise_for_status()
     _,after,actual=read_tab(session,endpoint,TABS[kind],False)
-    save_json(output/(kind+'-insert-after.json'),after)
     for (row,col),value in expected.items():
         if actual[row-1][col]!=value:raise RuntimeError('Organic inserted identity verification failed')
     fresh_rows=after['sheets'][0]['data'][0]['rowData']
