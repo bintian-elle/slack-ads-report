@@ -140,10 +140,10 @@ def api_statuses(env,kind,values,ads):
         _,matches,_,_=media_identity_plan(resolved,ads,identities,{x['row'] for x in issues})
     else:return {}
     byid={ad['id']:ad for ad in ads};result={}
-    paused={'PAUSED','ADSET_PAUSED','CAMPAIGN_PAUSED'}
+    from kol_organic_meta import observed_meta_status
     for row,ids in matches.items():
-        statuses={byid[aid].get('effective_status') for aid in ids}
-        result[row]='ACTIVE' if 'ACTIVE' in statuses else 'PAUSED' if statuses and statuses<=paused else None
+        statuses={observed_meta_status(byid[aid]) for aid in ids}
+        result[row]='ACTIVE' if 'ACTIVE' in statuses else 'PAUSED' if statuses=={'PAUSED'} else None
     return result
 
 
@@ -170,6 +170,9 @@ def run_rows(env,output,apply,kind,writer,target_keys=None,link_aliases=None):
     if runtime and kind in ('ads-meta','organic-meta') and runtime.state.get('blocked_until',0)>runtime.now():
         runtime.defer(runtime.state.get('blocked_reason','Meta cooldown'),runtime.state['blocked_until']-runtime.now())
         return RowResult()
+    if kind in ('ads-meta','organic-meta') and env.get('KOL_ORGANIC_SHEETS_LINK'):
+        from kol_business_discovery_phase import prepare_views_phase
+        prepare_views_phase(env,output,apply)
     discovery_retry=False
     if kind=='organic-meta' and target_keys is None:
         from kol_organic_discovery import run as discover

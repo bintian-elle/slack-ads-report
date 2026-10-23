@@ -100,6 +100,8 @@ class OrganicTests(unittest.TestCase):
         content = {'ABC': {'content_id': '123'}}
         ad = {'id': '1', 'creative': {'source_instagram_media_id': '123'}}
         values.append(list(values[2]))
+        values[3][3]='https://instagram.com/reel/DEF/'
+        content['DEF']={'content_id':'123'}
         _, matches, codes, issues = media_identity_plan(values, [ad], content)
         self.assertFalse(matches)
         self.assertFalse(codes)
@@ -266,6 +268,8 @@ class OrganicTests(unittest.TestCase):
         self.assertFalse(code_plan(self.values(), [[], [], first, second], ads)[1])
         self.assertFalse(code_plan(self.values(), [[], [], first], [])[1])
         duplicated = self.values() + [self.values()[2].copy()]
+        duplicated[3][3]='https://instagram.com/reel/DEF/'
+        duplicated[3][4]='CODE'
         resolved, codes, issues = code_plan(duplicated, [[], [], first], ads)
         self.assertFalse(codes)
         self.assertEqual(len(issues), 2)

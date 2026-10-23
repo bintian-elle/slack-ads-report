@@ -3,6 +3,7 @@ import copy
 import json
 import math
 import re
+import hashlib
 from threading import Event
 from contextlib import nullcontext
 from concurrent.futures import ThreadPoolExecutor
@@ -13,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from kol_organic_meta import post_key, plan as validate_schema
+from kol_organic_meta import post_key, organic_post_owners, plan as validate_schema
 
 COUNTERS = {7:('view_count','Views'), 9:('total_like_count','Likes'),
             10:('total_comments_count','Comments'), 11:('shares_count','Shares'),
@@ -22,7 +23,7 @@ MEDIA_FIELDS = 'id,permalink,username,timestamp,media_type,media_product_type'
 MANAGED = ('自动：','API did not return ', 'Missing or unsupported post link',
            'KOL fee requires manual entry','CPM ','CPE ','Total ','Public ', 'Slack ',
            'Metrics pending immediate','Immediate update failed','Metrics not available yet',
-           'Engagement ','Interaction update deferred')
+           'Engagement ','Interaction update deferred','Duplicate post;')
 
 
 def number(value):
@@ -33,12 +34,20 @@ def verified_media(media, key):
     return bool(media.get('id') and post_key(media.get('permalink',''))==key)
 
 
+def duplicate_note_plan(values,issues,selected_rows):
+    return [{'row':x['row'],'changes':{16:x['reason']}} for x in issues
+            if x.get('informational') and x['row'] in selected_rows
+            and (len(values[x['row']-1])<=16 or not values[x['row']-1][16]
+                 or str(values[x['row']-1][16]).startswith(MANAGED))]
+
+
 def metric_plan(values, content, method_a=None, natural_content=None):
     validate_schema(values,{})
-    planned=[]
+    planned=[];owners=organic_post_owners(values)
     for row,original in enumerate(values[2:],3):
         if not original or not original[0] or str(original[0]).lower()=='summary':
             continue
+        if owners.get(row,row)!=row:continue
         v=list(original)+['']*17;key=post_key(v[3]);media=content.get(key,{})
         changes={};reasons=[];missing=[]
         if not key:
@@ -200,7 +209,7 @@ def api_read(env, path, params=None):
             if stop is not None:stop.set()
             raise APIReadError(str(exc)) from None
         except requests.RequestException:
-            raise APIReadError('request failed') from None
+            raise APIReadError('Network request failed') from None
         try:data=r.json()
         except ValueError:raise APIReadError('invalid JSON') from None
         code=data.get('error',{}).get('code')
@@ -223,7 +232,7 @@ def ad_inventory(env):
     base='https://graph.facebook.com/'+env.get('KOL_TRACKER_META_API_VERSION','v23.0')
     try:
         return graph_pages(session,base+'/act_'+env['META_AD_ACCOUNT_ID'].removeprefix('act_')+'/ads',{
-            'fields':'id,name,effective_status,creative{id,branded_content,source_instagram_media_id,instagram_permalink_url}', 'limit':100})
+            'fields':'id,name,status,effective_status,creative{id,branded_content,source_instagram_media_id,instagram_permalink_url}', 'limit':100})
     finally:session.close()
 
 
@@ -232,36 +241,85 @@ def creator_media(env, username, wanted):
     if not re.fullmatch(r'[A-Za-z0-9_.]{1,30}',username):return {}
     fields='id,permalink,username,timestamp,view_count'
     ig=env.get('KOL_ORGANIC_META_IG_USER_ID','17841448894150543')
-    data=api_read(env,ig,{'fields':'business_discovery.username(%s){id,username,media.limit(100){%s}}'%(username,fields)})
-    media=data.get('business_discovery',{}).get('media',{})
-    found={};seen=set()
-    for page in range(10):
+    from kol_meta_runtime import reporting_window
+    runtime=env.get('_KOL_META_RUNTIME')
+    cycle=reporting_window(runtime.now() if runtime else None)
+    cutoff=env.get('_KOL_BD_CUTOFF',str(env.get('KOL_ORGANIC_META_YEAR','2026'))+'-01-01')
+    signature=hashlib.sha256(json.dumps([ig,env.get('KOL_TRACKER_META_API_VERSION','v23.0'),username,sorted(wanted),cutoff]).encode()).hexdigest()
+    walks=runtime.state.setdefault('business_discovery_walks',{}) if runtime else {}
+    # Only the current cycle's bounded target counters/cursors are retained.
+    for key in list(walks):
+        if walks[key].get('done') and walks[key].get('cycle')!=cycle:del walks[key]
+    walk=walks.setdefault(signature,{'cycle':cycle,'found':{},'cursor':None,'seen':[],'done':False})
+    found=walk['found'];seen={tuple(x) for x in walk['seen']};cursor=walk['cursor'];nxt=None;page=0
+    def checkpoint(done=False):
+        walk.update(found=found,cursor=cursor,seen=list(seen),done=done,cycle=cycle)
+        if runtime:runtime.save()
+    def current_result():
+        stale={key for key,item in found.items() if item.get('_bd_cycle',walk.get('cycle'))!=cycle}
+        if stale and not (env.get('_META_VIEWS_STOP_EVENT') is not None and env['_META_VIEWS_STOP_EVENT'].is_set()):
+            found.update({key:dict(item,_bd_cycle=cycle) for key,item in creator_media(env,username,stale).items()})
+            checkpoint(True)
+        return {key:{k:v for k,v in item.items() if k!='_bd_cycle'} for key,item in found.items() if item.get('_bd_cycle',cycle)==cycle}
+    for item in found.values():item.setdefault('_bd_cycle',walk.get('cycle'))
+    if walk['done']:return current_result()
+    while True:
+        if env.get('_META_VIEWS_STOP_EVENT') is not None and env['_META_VIEWS_STOP_EVENT'].is_set():return current_result()
+        expansion='media.limit(100)'+('.after(%s)'%cursor if cursor else '')
+        data=api_read(env,nxt) if nxt and not cursor else api_read(env,ig,{'fields':'business_discovery.username(%s){id,username,%s{%s}}'%(username,expansion,fields)})
+        media=data.get('business_discovery',{}).get('media',data)
+        page+=1
         for item in media.get('data',[]):
             key=post_key(item.get('permalink',''))
-            if key in wanted:found[key]=item
-        if set(found)>=wanted:return found
-        if env.get('_META_VIEWS_STOP_EVENT') is not None and env['_META_VIEWS_STOP_EVENT'].is_set():return found
+            if key in wanted:found[key]=dict(item,_bd_cycle=cycle)
+        if set(found)>=wanted:
+            checkpoint(True);return current_result()
         items=media.get('data',[])
-        year=str(env.get('KOL_ORGANIC_META_YEAR','2026'))
-        if items and all(str(x.get('timestamp',''))[:4].isdigit() and str(x['timestamp'])[:4]<year for x in items):return found
-        if page==9:return found
-        nxt=media.get('paging',{}).get('next')
-        if not nxt or nxt in seen:return found
-        seen.add(nxt)
-        try:data=api_read(env,nxt)
-        except APIReadError:
-            if env.get('_META_VIEWS_STOP_EVENT') is not None and env['_META_VIEWS_STOP_EVENT'].is_set():return found
-            raise
-        media=data.get('business_discovery',{}).get('media',data)
-    return found
+        if items and all(re.match(r'^\d{4}-\d{2}-\d{2}',str(x.get('timestamp',''))) and str(x['timestamp'])[:10]<cutoff for x in items):
+            checkpoint(True);return current_result()
+        paging=media.get('paging',{})
+        # Business Discovery field expansion returns cursors, not next URLs.
+        # Rebuild the same authorized field expansion for each after cursor.
+        cursor=paging.get('cursors',{}).get('after')
+        nxt=paging.get('next')
+        marker=('after',cursor) if cursor else ('next',nxt)
+        if not (cursor or nxt) or marker in seen or not items:
+            checkpoint(True);return current_result()
+        seen.add(marker)
+        checkpoint()
+        print('Business Discovery %s: page %d; matched %d/%d'%(username,page,len(found),len(wanted)),flush=True)
 
 
 def fetch_totals(env, values, discovery=(), ads=(), identities=None):
     """Views come directly from Business Discovery, never root ?ids= metadata."""
     from sync_creator_tracker import code_key
-    ids=dict(identities or {});errors={};bycreator={};wanted={};content={}
+    if '_KOL_BD_CONTENT' in env:
+        keys={post_key(row[3]) for row in values[2:] if len(row)>3 and row[0] and post_key(row[3])}
+        content={key:env['_KOL_BD_CONTENT'].get(key,{'_error':'Exact post not returned by Business Discovery'}) for key in keys}
+        ids=dict(identities or {})
+        ids.update({k:str(v['id']) for k,v in content.items() if verified_media(v,k)})
+        return content,ids
+    alias_path=Path(__file__).with_name('kol_meta_creator_aliases.json')
+    creator_aliases=json.loads(alias_path.read_text()) if alias_path.exists() else {}
+    ids=dict(identities or {});errors={};bycreator={};wanted={}
+    content={};seed=env.get('_KOL_BD_SEED',{})
+    fresh_discovery=list(discovery);discovery=[]
+    runtime=env.get('_KOL_META_RUNTIME')
+    if runtime:
+        def cached_posts(node):
+            if isinstance(node,dict):
+                if node.get('id') and node.get('permalink') and node.get('username'):
+                    discovery.append(dict(node,content_id=str(node['id'])))
+                for key in ('data','business_discovery','media'):
+                    if key in node:cached_posts(node[key])
+            elif isinstance(node,list):
+                for item in node:cached_posts(item)
+        for entry in runtime.state.get('cache',{}).values():cached_posts(entry.get('data',{}))
+    discovery.extend(fresh_discovery)
     stop=Event();view_env=dict(env,_META_VIEWS_STOP_EVENT=stop)
     known={post_key(c.get('permalink','')):str(c['content_id']) for c in discovery if c.get('content_id')}
+    known_users={post_key(c.get('permalink','')):str(c.get('username') or '') for c in discovery if c.get('content_id')}
+    metadata_checked=set()
     code_ids={};link_ids={}
     for ad in ads:
         c=ad.get('creative',{});mid=c.get('source_instagram_media_id')
@@ -281,11 +339,30 @@ def fetch_totals(env, values, discovery=(), ads=(), identities=None):
         if not candidates and key in ids:candidates.add(str(ids[key]))
         if len(candidates)==1:ids[key]=next(iter(candidates))
         elif len(candidates)>1:ids.pop(key,None);errors[key]='conflicting exact media bindings'
+        previous=seed.get(key,{})
+        if verified_media(previous,key) and number(previous.get('view_count')) and key not in errors:
+            if key in ids and str(previous['id'])!=str(ids[key]):
+                errors[key]='Cached Views Media ID conflicts with stored post binding'
+            else:
+                content[key]=dict(previous);ids[key]=str(previous['id']);continue
         if key not in errors:
             username=str(row[0]).strip().lstrip('@')
             alias=re.search(r'\(([A-Za-z0-9_.]+)\)',username)
             if alias:username=alias.group(1)
-            bycreator.setdefault(username,set()).add(key)
+            username=creator_aliases.get(str(row[0]).strip(),username)
+            if known_users.get(key) and ids.get(key)==known.get(key):username=known_users[key]
+            handle=re.search(r'instagram\.com/([A-Za-z0-9_.]+)/(?:p|reel|reels)/',str(row[3]))
+            if handle:username=handle.group(1)
+            if not env.get('_KOL_BD_ONLY') and not re.fullmatch(r'[A-Za-z0-9_.]{1,30}',username) and key in ids:
+                metadata_checked.add(key)
+                try:
+                    metadata=api_read(view_env,str(ids[key]),{'fields':'id,permalink,username'})
+                    if verified_media(metadata,key) and str(metadata['id'])==str(ids[key]):username=str(metadata.get('username',''))
+                except APIReadError as error:
+                    errors[key]=view_env.get('_META_VIEWS_STOP_REASON') or 'Instagram username lookup failed: '+str(error)
+                    continue
+            if re.fullmatch(r'[A-Za-z0-9_.]{1,30}',username):bycreator.setdefault(username,set()).add(key)
+            else:errors[key]='Verified Instagram username unavailable; Creator is a display name'
     def discovery_read(pair):
         creator,keys=pair
         if stop.is_set():return creator,keys,{},view_env.get('_META_VIEWS_STOP_REASON','Meta rate limit; remaining Views deferred')
@@ -311,9 +388,9 @@ def fetch_totals(env, values, discovery=(), ads=(), identities=None):
             if count%10==0 or count==len(bycreator):print('Organic Meta independent Views: %d/%d Creators'%(count,len(bycreator)),flush=True)
     # Optional alias recovery only: a failed metadata GET cannot erase a successful Views response.
     aliases={}
-    if not stop.is_set():
+    if not stop.is_set() and not env.get('_KOL_BD_ONLY'):
         for key,row in wanted.items():
-            if key in content or key not in ids or 'conflict' in errors.get(key,''):continue
+            if key in content or key not in ids or key in metadata_checked or 'conflict' in errors.get(key,''):continue
             try:metadata=api_read(view_env,str(ids[key]),{'fields':'id,permalink,username'})
             except APIReadError:
                 if stop.is_set():break
@@ -377,7 +454,7 @@ def write_updates(session, endpoint, prop, native, values, planned, other, outpu
     from kol_tracker import read_tab, save_json, verify_literal_target
     from update_meta_tracker import write_range
     cells=native['sheets'][0]['data'][0]['rowData'];body=[];expected=copy.deepcopy(native)
-    successful=0
+    successful=0;verified={}
     def build(row,col,value):
         source=cells[row-1].get('values',[]);target=source[col] if len(source)>col else {}
         formula=target.get('userEnteredValue',{}).get('formulaValue')
@@ -408,6 +485,7 @@ def write_updates(session, endpoint, prop, native, values, planned, other, outpu
             continue
         for request in requests_body:
             if request:record(request)
+        verified[row]={c for c in changes if c not in (13,14) or not (raw[c].get('userEnteredValue',{}).get('formulaValue') if len(raw)>c else False)}
         if any(c in changes for c in (7,8,9,10,11,12)):successful+=1
     for item in other+note_changes(values,planned):
         try:requests_body=[build(item['row'],c,v) for c,v in item['changes'].items()]
@@ -420,7 +498,7 @@ def write_updates(session, endpoint, prop, native, values, planned, other, outpu
         record(build(1,5,stamp+'\nUpdated: %d/%d'%(successful,len(planned))))
     save_json(output/'Organic-Meta-Totals-plan.json',{'basis':'Public lifetime counters; Method A Interaction/CPE',
               'successful_rows':successful,'planned':planned,'auxiliary_updates':other})
-    if not apply or not body:return
+    if not apply or not body:return verified
     if read_tab(session,endpoint,'Meta-IG')[1]!=native:raise RuntimeError('Organic sheet changed; no write')
     session.post(endpoint+':batchUpdate',json={'requests':body},timeout=90).raise_for_status()
     after=read_tab(session,endpoint,'Meta-IG')[1]
@@ -430,6 +508,7 @@ def write_updates(session, endpoint, prop, native, values, planned, other, outpu
             while row.get('values') and not row['values'][-1]:row['values'].pop()
     if expected!=after:raise RuntimeError('Organic Meta totals native readback failed')
     print('Organic Meta total counters and notes verified: %d/%d rows'%(successful,len(planned)),flush=True)
+    return verified
 
 
 def completed_metric_keys(planned,values,link_aliases=None):
@@ -450,7 +529,7 @@ def fetch_metric_lanes(env,values,discovery,ads,registry,output,state_path):
         print('Organic Meta metric turn: '+name,flush=True)
         with runtime.lane(name,batch) if runtime else nullcontext():
             if name=='views':
-                content,registry=fetch_totals(env,values,discovery,ads,registry)
+                content,registry=fetch_totals(env,values,list(discovery)+list(natural.values()),ads,registry)
                 save_json(output/'Organic-Meta-Totals-source.json',content)
             else:
                 interaction=method_a_values(env,values,output,state_path.parent/'organic-paid-cache.json',natural_out=natural)
@@ -461,6 +540,9 @@ def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
     from kol_targeting import load_link_aliases
     if link_aliases is None:link_aliases=load_link_aliases(env)
     from kol_tracker import BASE, sheet_session,read_tab,save_json
+    if '_KOL_BD_CONTENT' not in env and env.get('KOL_ORGANIC_SHEETS_LINK'):
+        from kol_business_discovery_phase import prepare_views_phase
+        prepare_views_phase(env,output,apply)
     from kol_organic_discovery import run as discover
     from kol_organic_meta import code_plan,media_identity_plan,status_plan
     runtime=env.get('_KOL_META_RUNTIME')
@@ -490,7 +572,7 @@ def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
         # together; the transport budget checkpoints an interrupted partial row.
         natural={}
         interaction=method_a_values(env,selected,output,state_path.parent/'organic-paid-cache.json',natural_out=natural)
-        content,registry=fetch_totals(env,selected,discovery,ads,registry)
+        content,registry=fetch_totals(env,selected,list(discovery)+list(natural.values()),ads,registry)
         save_json(output/'Organic-Meta-Totals-source.json',content)
     else:
         content,registry,natural,interaction=fetch_metric_lanes(env,selected,discovery,ads,registry,output,state_path)
@@ -503,13 +585,14 @@ def run(env, output, apply, creators=None, target_keys=None, link_aliases=None):
     # Check claims across every row before selecting writes for pending posts.
     resolved,codes,issues=code_plan(values,[],ads)
     resolved,matches,media_codes,media_issues=media_identity_plan(resolved,ads,identity_content,{x['row'] for x in issues})
-    selected_rows={x['row'] for x in planned}
+    selected_rows={n for n,row in enumerate(selected,1) if n>2 and row and row[0]}
     codes=[x for x in codes if x['row'] in selected_rows]
     media_codes=[x for x in media_codes if x['row'] in selected_rows]
     statuses=status_plan(resolved,ads,native['sheets'][0]['data'][0]['rowData'],matches)
     statuses=[x for x in statuses if x['row'] in selected_rows]
     print('Organic Meta totals planned: %d rows; %d status changes'%(len(planned),len(statuses)),flush=True)
-    write_updates(session,endpoint,prop,native,values,planned,codes+media_codes+statuses,output,apply)
+    duplicate_notes=duplicate_note_plan(values,media_issues,selected_rows)
+    write_updates(session,endpoint,prop,native,values,planned,codes+media_codes+statuses+duplicate_notes,output,apply)
     from kol_failures import record_failure
     for item in planned:
         if not all(col in item['changes'] for col in (7,8,9,10,11)) or 'target protected' in item['reason']:

@@ -246,6 +246,26 @@ def plan(values, content, paid=None):
     return planned, skipped
 
 
+def observed_meta_status(ad):
+    effective=ad.get('effective_status')
+    if effective=='ACTIVE':return 'ACTIVE'
+    if effective in PAUSED_STATUSES or ad.get('status')=='PAUSED' or ad.get('configured_status')=='PAUSED':return 'PAUSED'
+    return None
+
+
+def organic_post_owners(values):
+    groups={};owners={}
+    for n,row in enumerate(values[2:],3):
+        if not row or not row[0] or len(row)<4:continue
+        key=post_key(row[3])
+        if key:groups.setdefault(key,[]).append(n)
+    for rows in groups.values():
+        bound=[n for n in rows if len(values[n-1])>4 and values[n-1][4]]
+        owner=min(bound or rows)
+        for n in rows:owners[n]=owner
+    return owners
+
+
 def status_plan(values, ads, cells=None, ad_matches=None):
     """Only exact, unshared Ad Code bindings can change automatic statuses."""
     from update_meta_tracker import exact_mapping
@@ -257,7 +277,9 @@ def status_plan(values, ads, cells=None, ad_matches=None):
             rows.append((number, mapped))
     matches, _, _ = exact_mapping(rows, ads)
     if ad_matches is not None:
-        matches = ad_matches
+        matches = dict(ad_matches)
+        for n,owner in organic_post_owners(values).items():
+            if owner in ad_matches:matches.setdefault(n,ad_matches[owner])
     by_id = {ad['id']: ad for ad in ads}
     result = []
     for number, ids in matches.items():
@@ -265,9 +287,9 @@ def status_plan(values, ads, cells=None, ad_matches=None):
         current = row[5] if len(row) > 5 else ''
         if str(current).strip().lower() not in ['', 'testing', 'pause', 'paused']:
             continue
-        statuses = {by_id[aid].get('effective_status') for aid in ids}
+        statuses = {observed_meta_status(by_id[aid]) for aid in ids}
         value = ('testing' if 'ACTIVE' in statuses else 'paused'
-                 if statuses and statuses.issubset(PAUSED_STATUSES) else None)
+                 if statuses=={'PAUSED'} else None)
         if value is not None and cells is not None:
             row_cells = cells[number-1].get('values', [])
             target = row_cells[5] if len(row_cells) > 5 else {}
@@ -360,15 +382,15 @@ def code_plan(values, tracker_values, ads):
                 row[4] = candidates[key]
                 updates.append({'row': number, 'changes': {4: row[4]},
                                 'source': 'Exact Ads Tracker Post Link + live Creative Ad Code'})
-    bindings = []
+    bindings = [];owners=organic_post_owners(resolved)
     for number, row in enumerate(resolved[2:], 3):
-        if row and row[0] and len(row) > 4 and row[4]:
+        if row and row[0] and len(row) > 4 and row[4] and owners.get(number,number)==number:
             bindings.append((number, ['', row[0], '', '', '', '', '', row[4]]))
     _, _, conflicts = exact_mapping(bindings, ads)
     blocked.update(number for numbers in conflicts.values() for number in numbers)
     for number in sorted({n for ns in conflicts.values() for n in ns}):
         issues.append({'row': number, 'reason': 'Ad ID claimed by multiple Organic rows'})
-    updates = [item for item in updates if item['row'] not in blocked]
+    updates = [item for item in updates if item['row'] not in blocked and owners.get(item['row'],item['row'])==item['row']]
     # Remove ambiguous bindings from status calculation, without changing sheet values.
     for number in blocked:
         resolved[number-1][4] = ''
@@ -389,9 +411,12 @@ def media_identity_plan(values, ads, content, blocked_rows=()):
             by_code.setdefault(code, set()).add(ad['id'])
     resolved = [list(row) for row in values]
     matches, updates, issues, claims = {}, [], [], {}
-    blocked = set(blocked_rows)
+    blocked = set(blocked_rows);owners=organic_post_owners(values)
     for number, row in enumerate(resolved[2:], 3):
         if not row or not row[0] or number in blocked:
+            continue
+        if owners.get(number,number)!=number:
+            issues.append({'row':number,'reason':'Duplicate post; metrics assigned to row %d'%owners[number],'informational':True})
             continue
         row.extend([''] * max(0, 6-len(row)))
         item = content.get(post_key(row[3]))

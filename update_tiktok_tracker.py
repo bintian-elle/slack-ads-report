@@ -45,6 +45,8 @@ def fetch_report(env):
                 'advertiser_id': str(account).strip(), 'report_type': 'BASIC',
                 'data_level': 'AUCTION_AD', 'dimensions': json.dumps(['ad_id']),
                 'metrics': json.dumps(METRICS), 'query_lifetime': 'true',
+                'filtering': json.dumps([{'field_name':'ad_status','filter_type':'IN',
+                                          'filter_value':json.dumps(['STATUS_ALL'])}]),
                 'page': page, 'page_size': 1000})
             if result.get('code') != 0:
                 raise RuntimeError('TikTok reporting failed; code=%s' % result.get('code'))
@@ -68,7 +70,8 @@ def fetch_ad_details(env):
         page = 1
         while True:
             result = get_json(session, 'https://business-api.tiktok.com/open_api/v1.3/ad/get/', {
-                'advertiser_id': str(account).strip(), 'page': page, 'page_size': 100})
+                'advertiser_id': str(account).strip(), 'page': page, 'page_size': 100,
+                'filtering': json.dumps({'primary_status':'STATUS_ALL'})})
             if result.get('code') != 0:
                 raise RuntimeError('TikTok ad details failed; code=%s' % result.get('code'))
             data = result['data']

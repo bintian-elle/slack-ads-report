@@ -323,15 +323,34 @@ def poll(env, state_path, output, apply):
     print(json.dumps(report, ensure_ascii=False), flush=True)
 
 
+def tiktok_post_owners(values):
+    """One metric owner per post: existing N binding first, then first row."""
+    groups={}
+    for number,row in enumerate(values[2:],3):
+        if not row or not row[0] or len(row)<4:continue
+        match=re.search(r'/video/(\d+)',str(row[3]))
+        if match:groups.setdefault(match.group(1),[]).append(number)
+    owners={}
+    for post,rows in groups.items():
+        bound=[n for n in rows if len(values[n-1])>13 and str(values[n-1][13]).strip()]
+        owner=min(bound or rows)
+        for number in rows:owners[number]=owner
+    return owners
+
+
 def tiktok_bindings(values, ads, details=None):
     """Exact post IDs precede provisional names; never silently replace N."""
     byid = {a['dimensions']['ad_id']: a for a in ads}
     detail_byid = {str(a['ad_id']): a for a in (details or [])}
     planned, skipped = [], []
+    owners=tiktok_post_owners(values)
     for index, original in enumerate(values[2:], 3):
         if not original or not original[0]:
             continue
         row = original + [''] * 14
+        if owners.get(index,index)!=index:
+            skipped.append({'row':index,'reason':'Duplicate post; metrics assigned to row %d'%owners[index],
+                            'informational':True});continue
         binding = str(row[13]).strip()
         if binding and not re.fullmatch(r'\d{10,}(?:[\s,;]+\d{10,})*', binding):
             skipped.append({'row': index, 'reason': 'Invalid persisted Ad IDs'}); continue
@@ -349,12 +368,12 @@ def tiktok_bindings(values, ads, details=None):
                 skipped.append({'row': index, 'reason': 'Post ID conflicts with persisted binding; preserve row'}); continue
             if exact:
                 method = 'post_id_exact_verified_binding'
-        if not ids and str(row[5]).lower() in ['pause', 'paused']:
-            skipped.append({'row': index, 'reason': 'Historical paused row without Ad IDs',
-                            'exact_candidate_ids': exact}); continue
         if not ids and exact:
             ids = exact
             method = 'post_id_exact'
+        if not ids and str(row[5]).lower() in ['pause', 'paused']:
+            skipped.append({'row': index, 'reason': 'Historical paused row without Ad IDs',
+                            'exact_candidate_ids': exact}); continue
         if not ids and post_id and details is not None:
             skipped.append({'row': index, 'reason': 'No exact Post ID match; no name-only fallback'}); continue
         if not ids:
@@ -423,7 +442,8 @@ def tiktok_daily(env, output, apply, target_keys=None, link_aliases=None):
                for item in planned if item['preserve']]
     notes = plan_notes(scope_values(working,'ads-tiktok',target_keys),{item['row'] for item in planned},skipped+partial,0,3)
     from kol_failures import record_failure
-    for item in skipped+partial:record_failure(env,item['reason'],False)
+    for item in skipped+partial:
+        if not item.get('informational'):record_failure(env,item['reason'],False)
     save_json(output / 'TikTok-daily-plan.json', {'planned': planned, 'skipped': skipped, 'note_updates':notes, 'window': 'API lifetime through request time'})
     print('TikTok metrics planned: %d; skipped: %d' % (len(planned), len(skipped)), flush=True)
     if not apply or not (planned or notes):

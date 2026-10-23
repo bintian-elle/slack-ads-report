@@ -1,4 +1,5 @@
 import unittest
+import json
 from datetime import datetime
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -107,12 +108,25 @@ class ProductionTrackerTests(unittest.TestCase):
         self.assertFalse(planned)
         self.assertIn('conflicts', skipped[0]['reason'])
 
-    def test_exact_paused_candidates_reported_not_written(self):
+    def test_exact_paused_candidates_are_accepted(self):
         rows = [[], [], ['Josh', '', '', LINK, '', 'paused']]
         details = [{'ad_id': '1873538721081441', 'tiktok_item_id': '1234567890123456789'}]
         planned, skipped = tiktok_bindings(rows, [ad('different', '1873538721081441')], details)
-        self.assertFalse(planned)
-        self.assertEqual(skipped[0]['exact_candidate_ids'], ['1873538721081441'])
+        self.assertFalse(skipped)
+        self.assertEqual(planned[0]['ad_ids'], ['1873538721081441'])
+
+    def test_same_post_is_counted_on_only_one_row(self):
+        rows=[[],[],['Josh','','',LINK,'','paused'],['Josh','','',LINK,'','paused']]
+        details=[{'ad_id':'1873538721081441','tiktok_item_id':'1234567890123456789'}]
+        planned,skipped=tiktok_bindings(rows,[ad('different','1873538721081441')],details)
+        self.assertEqual([p['row'] for p in planned],[3])
+        self.assertEqual([p['row'] for p in skipped],[4])
+
+    def test_duplicate_post_keeps_existing_bound_owner(self):
+        rows=[[],[],['Josh','','',LINK,'','paused'],['Josh','','',LINK,'','paused','','','','','','','','1873538721081441']]
+        details=[{'ad_id':'1873538721081441','tiktok_item_id':'1234567890123456789'}]
+        planned,skipped=tiktok_bindings(rows,[ad('different','1873538721081441')],details)
+        self.assertEqual([p['row'] for p in planned],[4])
 
     def test_new_exact_ad_group_does_not_expand_existing_binding(self):
         rows = [[], [], ['Josh', '', '', LINK, '', 'testing', '', '', '', '', '', '', '', '1873538721081441']]
@@ -130,9 +144,21 @@ class ProductionTrackerTests(unittest.TestCase):
             result = fetch_ad_details(env)
         self.assertEqual([x['ad_id'] for x in result], ['1', '2'])
         self.assertEqual([x.args[2]['page'] for x in get.call_args_list], [1, 2])
+        self.assertEqual(json.loads(get.call_args_list[0].args[2]['filtering']),{'primary_status':'STATUS_ALL'})
         session.return_value.headers.__setitem__.assert_called_with('Access-Token', 'new-test-token')
 
     def test_details_permission_error_fails_closed(self):
         with patch('update_tiktok_tracker.get_json', return_value={'code': 40001}):
             with self.assertRaises(RuntimeError):
                 fetch_ad_details({'TIKTOK_ACCESS_TOKEN': 'test', 'TIKTOK_ADVERTISER_IDS': '123'})
+
+    def test_report_includes_deleted_ads_for_persisted_exact_ids(self):
+        from update_tiktok_tracker import fetch_report
+        def report(session,url,params):
+            filters=json.loads(params.get('filtering','[]'))
+            include=any(x.get('field_name')=='ad_status' and json.loads(x['filter_value'])==['STATUS_ALL'] for x in filters)
+            rows=[{'dimensions':{'ad_id':'deleted'},'metrics':{'spend':'19.73'}}] if include else []
+            return {'code':0,'data':{'list':rows,'page_info':{'total_page':1}}}
+        with patch('update_tiktok_tracker.get_json',side_effect=report):
+            result=fetch_report({'TIKTOK_ACCESS_TOKEN':'test','TIKTOK_ADVERTISER_IDS':'123'})
+        self.assertEqual(result[0]['dimensions']['ad_id'],'deleted')

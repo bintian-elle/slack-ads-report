@@ -189,3 +189,27 @@ class RowQueueTests(unittest.TestCase):
             seen=[]
             q.run([{'key':'a','status':'ACTIVE'}],lambda item:seen.append(item['key']) or True)
             self.assertEqual(seen,['a'])
+
+    def test_real_tiktok_writer_duplicate_note_does_not_fail_owner_checkpoint(self):
+        import copy
+        from unittest.mock import patch,Mock
+        from kol_row_updates import run_rows
+        from kol_tracker import tiktok_daily
+        from test_tiktok_name_matching import ad
+        link='https://www.tiktok.com/@joe/video/1234567890123456789'
+        values=[['Header'],[],['Joe','','',link,'','paused'],['Joe','','',link,'','paused']]
+        native={'sheets':[{'data':[{'rowData':[{'values':[{'userEnteredValue':{'stringValue':str(v)}} for v in row]} for row in values]}]}]}
+        session=Mock()
+        def post(url,json,timeout):
+            for req in json['requests']:
+                u=req['updateCells'];r=u['range'];row=native['sheets'][0]['data'][0]['rowData'][r['startRowIndex']]['values']
+                c=r['startColumnIndex'];row.extend({} for _ in range(max(0,c+1-len(row))))
+                row[c]['userEnteredValue']=u['rows'][0]['values'][0]['userEnteredValue']
+            return Mock()
+        session.post.side_effect=post
+        details=[{'ad_id':'1873538721081441','tiktok_item_id':'1234567890123456789'}]
+        with tempfile.TemporaryDirectory() as directory,patch('kol_live_insert.open_tab',return_value=(None,'sheet',None,None,values)),patch('kol_tracker.sheet_session',return_value=(session,'sheet')),patch('kol_tracker.read_tab',side_effect=lambda *a,**k:({'sheetId':1},copy.deepcopy(native),values)),patch('kol_row_updates.time.sleep'):
+            env={'KOL_TRACKER_STATE_DIR':directory,'_KOL_TIKTOK_DETAILS':details,'_KOL_TIKTOK_REPORT':[ad('different','1873538721081441')]}
+            result=run_rows(env,Path(directory),True,'ads-tiktok',tiktok_daily,link_aliases={})
+            self.assertEqual(set(result),{'tt:1234567890123456789'})
+            self.assertFalse(result.unavailable)
