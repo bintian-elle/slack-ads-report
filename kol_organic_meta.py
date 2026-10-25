@@ -91,9 +91,8 @@ def fetch_ad_interactions(env, content, cache_path=None):
     session.headers['Authorization'] = 'Bearer ' + env['META_ACCESS_TOKEN']
     base = 'https://graph.facebook.com/' + env.get('KOL_TRACKER_META_API_VERSION', 'v23.0')
     account = 'act_' + env['META_AD_ACCOUNT_ID'].removeprefix('act_')
-    info = get_json(session, base + '/' + account, {'fields': 'timezone_name'})
-    ads = graph_pages(session, base + '/' + account + '/ads', {'limit': 100,
-        'fields': 'id,name,created_time,effective_status,creative{id,branded_content,source_instagram_media_id}'})
+    from kol_meta_inventory import inventory
+    info,ads=inventory(env)
     by_media = {str(item['content_id']): set() for item in content.values()}
     for ad in ads:
         source = str(ad.get('creative', {}).get('source_instagram_media_id', ''))

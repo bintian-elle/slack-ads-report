@@ -193,12 +193,8 @@ def dedup_new(platform, values, candidates):
 
 
 def meta_inventory(env):
-    s = requests.Session(); s.headers['Authorization'] = 'Bearer ' + env['META_ACCESS_TOKEN']
-    base = 'https://graph.facebook.com/' + env.get('KOL_TRACKER_META_API_VERSION', 'v23.0')
-    account = 'act_' + env['META_AD_ACCOUNT_ID'].removeprefix('act_')
-    info = get_json(s, base + '/' + account, {'fields': 'timezone_name'})
-    ads = graph_pages(s, base + '/' + account + '/ads', {'fields': 'id,name,created_time,effective_status,campaign{id,name},adset{id,name},creative{id,branded_content}', 'limit': 100})
-    return info, ads
+    from kol_meta_inventory import inventory
+    return inventory(env)
 
 
 def new_row(platform, item, info=None, ads=None):

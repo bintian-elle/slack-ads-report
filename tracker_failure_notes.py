@@ -4,6 +4,7 @@ PREFIX = 'Update failed: '
 
 
 def plan_notes(values, successful_rows, failures, creator_col, first_row):
+    from kol_note_policy import failure_note
     headers = values[0] if values else []
     columns = [i for i, value in enumerate(headers) if str(value).strip() == HEADER]
     if not columns:
@@ -13,7 +14,9 @@ def plan_notes(values, successful_rows, failures, creator_col, first_row):
     col = columns[0]
     reasons = {}
     for item in failures:
-        reasons.setdefault(item['row'], []).append(item['reason'])
+        reason=failure_note(item['reason'])
+        reasons.setdefault(item['row'], [])
+        if reason:reasons[item['row']].append(reason)
     changes = []
     for number, row in enumerate(values[first_row-1:], first_row):
         if len(row) <= creator_col or not row[creator_col] or str(row[creator_col]).strip().lower() == 'summary':
@@ -22,7 +25,8 @@ def plan_notes(values, successful_rows, failures, creator_col, first_row):
         if old and not old.startswith(PREFIX):
             continue  # Manual notes are user-owned.
         if number in reasons:
-            value = PREFIX + '; '.join(dict.fromkeys(reasons[number]))
+            value = PREFIX + '; '.join(dict.fromkeys(reasons[number])) if reasons[number] else failure_note(old.removeprefix(PREFIX))
+            if value and not value.startswith(PREFIX):value=PREFIX+value
         elif number in successful_rows:
             value = ''
         else:

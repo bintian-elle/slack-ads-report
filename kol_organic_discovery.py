@@ -196,7 +196,8 @@ def insert_additions(env,output,apply,prop,native,values,additions,pending=()):
         day = datetime.strptime(item['date'],'%Y-%m-%d').date()
         identity=[(0,item['creator']),(1,(day-datetime(1899,12,30).date()).days),(3,item['post_link'])]
         if item.get('ad_code'):identity.append((4,item['ad_code']))
-        if item.get('note'):identity.append((16,item['note']))
+        from kol_note_policy import failure_note
+        if item.get('note'):identity.append((16,failure_note(item['note'])))
         if item.get('content_id','').isdigit() and len(values[1])>17 and str(values[1][17]).strip()=='Reel ID':
             identity.append((17,item['content_id']))
         for col,value in identity:

@@ -317,7 +317,8 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
             record_failure(env,reason)
         old=str(v[note_col]) if len(v)>note_col else ''
         if not old or old.startswith(MANAGED):
-            try:add(row,note_col,reason)
+            from kol_note_policy import failure_note
+            try:add(row,note_col,failure_note(reason))
             except RuntimeError:issues.append({'row':row,'reason':'Failure reason target protected'})
         print('Organic YTB row %d: %s'%(row,reason or 'metrics ready'),flush=True)
     if success:add(1,4,'Views\n[%s update]'%datetime.now(ZoneInfo('America/New_York')).strftime('%m/%d'))

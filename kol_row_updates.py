@@ -92,7 +92,8 @@ class RowQueue:
             rank=self.prepare(item)
             if rank is not None:work.append((rank,item))
         self.save();completed=set()
-        for _,item in sorted(work,key=lambda pair:(pair[0],pair[1].get('row',0)))[:limit]:
+        from kol_query_order import launch_order
+        for _,item in sorted(work,key=lambda pair:(pair[0],-launch_order(pair[1].get('launch')),pair[1].get('row',0)))[:limit]:
             if stop and stop():break
             entry=self.state['rows'][item['key']]
             entry.update(inflight=True,row=item.get('row'),retry_at=self.now()+300)
@@ -212,7 +213,9 @@ def run_rows(env,output,apply,kind,writer,target_keys=None,link_aliases=None):
         primary=sorted(k for k in keys if not k.startswith(('igcode:','ttcode:'))) or sorted(keys)
         columns={'ads-meta':(1,6,7),'ads-tiktok':(0,2,3,13),'organic-meta':(0,3,4,17),'organic-tiktok':(0,2),'organic-youtube':(0,2)}[kind]
         fingerprint=hashlib.sha256(json.dumps([row[c] if len(row)>c else '' for c in columns],sort_keys=True).encode()).hexdigest()
-        items.append({'key':primary[0],'row':n,'keys':keys,'status':statuses.get(n),'fingerprint':fingerprint})
+        date_col=2 if kind=='ads-meta' else 4 if kind=='ads-tiktok' else 1
+        items.append({'key':primary[0],'row':n,'keys':keys,'status':statuses.get(n),'fingerprint':fingerprint,
+                      'launch':row[date_col] if len(row)>date_col else None})
     scope=endpoint+'|'+kind
     digest=hashlib.sha256(scope.encode()).hexdigest()[:16]
     queue=RowQueue(root_path(env)/('row-progress-'+digest+'.json'),scope,persist=apply)

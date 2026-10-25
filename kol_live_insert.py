@@ -141,7 +141,8 @@ def simple_organic_insert(session,endpoint,prop,native,values,kind,additions,out
             body.append({'copyPaste':{'source':{'sheetId':sid,'startRowIndex':index-1,'endRowIndex':index,'startColumnIndex':0,'endColumnIndex':note+1},
                 'destination':{'sheetId':sid,'startRowIndex':row-1,'endRowIndex':row,'startColumnIndex':0,'endColumnIndex':note+1},'pasteType':paste}})
         day=datetime.fromisoformat(item['date']).date();serial=(day-datetime(1899,12,30).date()).days
-        for col,value in ((0,item['creator']),(1,serial),(2,item['post_link']),(note,item['note'])):
+        from kol_note_policy import failure_note
+        for col,value in ((0,item['creator']),(1,serial),(2,item['post_link']),(note,failure_note(item['note']))):
             body.append(write_range(sid,row,col,[value]));expected[(row,col)]=value
         formula='=SUM(G%d:J%d)'%(row,row) if kind=='organic-tiktok' else '=G%d+H%d'%(row,row)
         for col,value in ((5,formula),(10,'=IFERROR(IF(AND(ISNUMBER(D%d),E%d>0),D%d/E%d*1000,""),"")'%((row,)*4)),
@@ -177,6 +178,9 @@ def write_failure(env,kind,jobs,reason,apply,aliases):
     from kol_tracker import read_tab,verify_literal_target
     from update_meta_tracker import write_range
     if not apply:return
+    from kol_note_policy import failure_note
+    reason=failure_note(reason)
+    if not reason:return
     if kind.startswith('ads-'):reason='Update failed: '+reason
     session,endpoint,prop,native,values=open_tab(env,kind)
     header=values[1] if kind=='organic-meta' else values[0]

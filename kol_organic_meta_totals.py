@@ -100,14 +100,16 @@ def metric_plan(values, content, method_a=None, natural_content=None):
 
 
 def note_changes(values, planned):
+    from kol_note_policy import managed_note,failure_note
     header=values[1]
     if len(header)<=16 or header[16]!='Reason for data update failure':
         raise RuntimeError('Organic Meta failure reason header changed')
     result=[]
     for item in planned:
         row=values[item['row']-1];old=str(row[16]) if len(row)>16 else ''
-        if old and not old.startswith(MANAGED):continue
-        if old!=item['reason']:result.append({'row':item['row'],'changes':{16:item['reason']}})
+        if not managed_note(old,MANAGED):continue
+        reason=failure_note(item['reason'])
+        if old!=reason:result.append({'row':item['row'],'changes':{16:reason}})
     return result
 
 
@@ -227,13 +229,8 @@ def api_read(env, path, params=None):
 
 
 def ad_inventory(env):
-    from sync_creator_tracker import graph_pages
-    session=requests.Session();session.headers['Authorization']='Bearer '+env['META_ACCESS_TOKEN']
-    base='https://graph.facebook.com/'+env.get('KOL_TRACKER_META_API_VERSION','v23.0')
-    try:
-        return graph_pages(session,base+'/act_'+env['META_AD_ACCOUNT_ID'].removeprefix('act_')+'/ads',{
-            'fields':'id,name,status,effective_status,creative{id,branded_content,source_instagram_media_id,instagram_permalink_url}', 'limit':100})
-    finally:session.close()
+    from kol_meta_inventory import inventory
+    return inventory(env)[1]
 
 
 def creator_media(env, username, wanted):
@@ -250,7 +247,14 @@ def creator_media(env, username, wanted):
     # Only the current cycle's bounded target counters/cursors are retained.
     for key in list(walks):
         if walks[key].get('done') and walks[key].get('cycle')!=cycle:del walks[key]
-    walk=walks.setdefault(signature,{'cycle':cycle,'found':{},'cursor':None,'seen':[],'done':False})
+    walk_scope=[ig,env.get('KOL_TRACKER_META_API_VERSION','v23.0'),username,cutoff]
+    if signature not in walks:
+        resumable=[(key,item) for key,item in walks.items() if item.get('scope')==walk_scope
+                   and not item.get('done') and wanted.issubset(set(item.get('targets',[])))]
+        if resumable:signature=min(resumable,key=lambda pair:len(pair[1]['targets']))[0]
+    walk=walks.setdefault(signature,{'cycle':cycle,'found':{},'cursor':None,'seen':[],'done':False,
+                                     'scope':walk_scope,'targets':sorted(wanted)})
+    walk.setdefault('scope',walk_scope);walk.setdefault('targets',sorted(wanted))
     found=walk['found'];seen={tuple(x) for x in walk['seen']};cursor=walk['cursor'];nxt=None;page=0
     def checkpoint(done=False):
         walk.update(found=found,cursor=cursor,seen=list(seen),done=done,cycle=cycle)
@@ -381,7 +385,10 @@ def fetch_totals(env, values, discovery=(), ads=(), identities=None):
                     content[key]=dict(item,_views_source='Business Discovery view_count');ids[key]=str(item['id']);errors.pop(key,None)
                 else:errors[key]='Business Discovery did not return view_count'
             else:errors[key]=error or 'Exact post not returned by Business Discovery'
-    ordered=sorted(bycreator.items(),key=lambda pair:all(str(wanted[key][5] if len(wanted[key])>5 else '').lower() in ('pause','paused') for key in pair[1]))
+    from kol_query_order import launch_order
+    ordered=sorted(bycreator.items(),key=lambda pair:(
+        all(str(wanted[key][5] if len(wanted[key])>5 else '').lower() in ('pause','paused') for key in pair[1]),
+        -max(launch_order(wanted[key][1]) for key in pair[1])))
     with ThreadPoolExecutor(max_workers=1) as pool:
         for count,(creator,keys,found,error) in enumerate(pool.map(discovery_read,ordered),1):
             accept(keys,found,error)
@@ -411,7 +418,8 @@ def views_only_plan(values,content):
     for n,row in enumerate(values[2:],3):
         if not row or not row[0] or str(row[0]).lower()=='summary':continue
         key=post_key(row[3] if len(row)>3 else '');media=content.get(key,{})
-        old=str(row[16]) if len(row)>16 else '';managed=not old or old.startswith(MANAGED)
+        from kol_note_policy import managed_note
+        old=str(row[16]) if len(row)>16 else '';managed=managed_note(old,MANAGED)
         parts=[]
         for clause in old.split('; '):
             if managed and (clause.startswith(('Public Views unavailable','Total metrics unavailable','CPM not refreshed: total Views')) or clause=='existing values retained'):continue

@@ -24,6 +24,10 @@ def failure_reason(error):
     import requests
     if isinstance(error, requests.Timeout):
         return 'Request timed out; existing metrics retained'
+    if isinstance(error, requests.ConnectionError):
+        return 'Network request failed; existing metrics retained'
+    if isinstance(error, requests.HTTPError) and error.response is not None:
+        return 'HTTP %d; existing metrics retained'%error.response.status_code
     if isinstance(error, requests.RequestException):
         return 'HTTP request failed; existing metrics retained'
     return 'Video data unavailable; existing metrics retained'
@@ -31,6 +35,7 @@ def failure_reason(error):
 
 def note_plan(values, successes, reasons):
     """Append after all populated columns; preserve non-managed manual notes."""
+    from kol_note_policy import failure_note
     header = values[0]
     if NOTE_HEADER in header:
         col = header.index(NOTE_HEADER)
@@ -44,7 +49,7 @@ def note_plan(values, successes, reasons):
         old = str(row[col]) if len(row)>col else ''
         if old and not old.startswith(NOTE_PREFIXES):
             continue
-        value = '' if number in successes else reasons.get(number, '')
+        value = '' if number in successes else failure_note(reasons.get(number, ''))
         if number not in successes and number not in reasons:
             continue
         if value != old:

@@ -178,9 +178,9 @@ def run(env, output, apply, target_keys=None, link_aliases=None):
     s = requests.Session(); s.headers['Authorization']='Bearer '+env['META_ACCESS_TOKEN']
     base='https://graph.facebook.com/'+env.get('KOL_TRACKER_META_API_VERSION','v23.0')
     account='act_'+env['META_AD_ACCOUNT_ID'].removeprefix('act_')
-    info=get_json(s,base+'/'+account,{'fields':'id,name,currency,timezone_name'})
+    from kol_meta_inventory import inventory
+    info,ads=inventory(env)
     end=metric_cutoff(env,target_keys is not None,datetime.now(ZoneInfo(info['timezone_name'])).date())
-    ads=graph_pages(s,base+'/'+account+'/ads',{'fields':'id,name,created_time,effective_status,campaign{id,name},adset{id,name},creative{id,branded_content}','limit':100})
     matches, skips, conflicts=exact_mapping(rows,ads)
     from kol_targeting import row_keys,scope_values
     if target_keys is not None:

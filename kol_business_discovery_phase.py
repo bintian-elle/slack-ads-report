@@ -1,6 +1,7 @@
 """KOL-only Views-first gate; counters/cursors, never full-sheet backups."""
 import hashlib
 import json
+from contextlib import nullcontext
 from datetime import datetime, timedelta
 
 from kol_meta_runtime import reporting_window
@@ -37,18 +38,32 @@ def prepare_views_phase(env, output, apply):
     cutoff=min(dates) if dates else str(env.get('KOL_ORGANIC_META_YEAR','2026'))+'-01-01'
     scoped=dict(env,_KOL_BD_CUTOFF=cutoff,_KOL_BD_ONLY=True)
     scoped.pop('_KOL_BD_CONTENT',None)
-    if saved.get('cycle')==cycle and saved.get('done') and saved.get('config')==config:
+    if saved.get('cycle')==cycle and saved.get('config')==config:
         scoped['_KOL_BD_SEED']=saved.get('content',{})
-    content=saved['content'] if reuse else fetch_totals(scoped,values)[0]
+    known_users=dict(saved.get('verified_users',{})) if saved.get('config',[])[:3]==config[:3] else {}
+    for key,item in (saved.get('content',{}) if saved.get('config',[])[:3]==config[:3] else {}).items():
+        if item.get('id') and item.get('username') and post_key(item.get('permalink',''))==key:
+            known_users[key]={'content_id':str(item['id']),'username':item['username'],'permalink':item['permalink']}
+    batch=max(1,min(10,int(env.get('KOL_BD_REQUEST_BATCH_SIZE','5'))))
+    with runtime.lane('views',batch) if runtime else nullcontext():
+        content=saved['content'] if reuse else fetch_totals(scoped,values,list(known_users.values()))[0]
+    keys={post_key(row[3]) for row in values[2:] if len(row)>3 and row[0]}
+    for key,item in content.items():
+        if item.get('id') and item.get('username') and post_key(item.get('permalink',''))==key:
+            known_users[key]={'content_id':str(item['id']),'username':item['username'],'permalink':item['permalink']}
+    known_users={key:item for key,item in known_users.items() if key in keys}
     planned=views_only_plan(values,content)
+    from kol_note_policy import failure_note,managed_note
+    from kol_organic_meta_totals import MANAGED
     needed=[item for item in planned if any((values[item['row']-1]+['']*30)[col]!=value for col,value in item['changes'].items())
-            or (values[item['row']-1]+['']*30)[16]!=item['reason']]
+            or (managed_note((values[item['row']-1]+['']*30)[16],MANAGED)
+                and (values[item['row']-1]+['']*30)[16]!=failure_note(item['reason']))]
     # Only this phase's H/N (Views/CPM) and managed notes are written.
     verified=write_updates(session,endpoint,prop,native,values,needed,[],output,apply) if needed else {}
     pending=[item for item in content.values() if temporary_reason(item.get('_error',''))]
     unwritten=[item for item in needed if 7 in item['changes'] and 7 not in (verified or {}).get(item['row'],set())]
     done=not pending and not unwritten
-    if apply:save_json(path,{'signature':signature,'cycle':cycle,'cutoff':cutoff,'config':config,'done':done,'content':content})
+    if apply:save_json(path,{'signature':signature,'cycle':cycle,'cutoff':cutoff,'config':config,'done':done,'content':content,'verified_users':known_users})
     print('Business Discovery phase: %d Views returned; %d temporarily pending; cutoff %s'%
           (sum('view_count' in x for x in content.values()),len(pending),cutoff),flush=True)
     env['_KOL_BD_CONTENT']=content
