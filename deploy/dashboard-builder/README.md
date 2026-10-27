@@ -1,8 +1,10 @@
 # Dashboard Builder weekly publication templates
 
-These systemd files are **TEMPLATES ONLY — NOT INSTALLED OR ENABLED**. They have not been deployed to ANC or any production machine. There is **no local custom schedule, cron, launchd job, Codex automation or heartbeat** for this workflow. Scheduling is reserved for a future remote-host deployment. No Slack or email is sent.
+These units were installed and enabled on ANC on 2026-10-26 (America/Chicago) during the user-authorized Dashboard release. `dashboard-builder-weekly.timer` is active. A manual idempotence run succeeded for all three brands. There is no local custom schedule, cron, launchd job, Codex automation or heartbeat for this publication workflow. No Slack or email is sent.
 
-The current user requirement supersedes the earlier 01:00 discussion: start every **Tuesday at 04:00 America/New_York**, then make bounded hourly completion attempts at 05:00–09:00 Eastern. `America/New_York` handles daylight saving automatically; do not replace it with a fixed UTC offset. No local follow-up remains active. The 04:00 start and retry slots below describe the future remote timer only.
+Runtime checkouts are `/home/ubuntu/work/bintian/emw3-dashboard` and `/home/ubuntu/work/bintian/slack-ads-report`. The Node entrypoint loads the existing protected Dashboard `.env.local` with `@next/env`; no credential values are copied into these unit files. The official database CA is installed at `/etc/emw3/supabase-prod-ca-2021.crt`. Existing publication rows are reused from the insight database.
+
+The current user requirement supersedes the earlier 01:00 discussion: start every **Tuesday at 04:00 America/New_York**, then make bounded hourly completion attempts at 05:00–09:00 Eastern. `America/New_York` handles daylight saving automatically; do not replace it with a fixed UTC offset. No local follow-up remains active. The 04:00 start and retry slots below describe the installed remote timer.
 
 ## Publication contract
 
