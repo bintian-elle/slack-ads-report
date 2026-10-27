@@ -1,0 +1,29 @@
+[Unit]
+Description=Prepare and atomically publish completed Dashboard Builder weekly snapshots
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/work/bintian/emw3-dashboard
+# Installed on ANC for the Dashboard Builder weekly publication workflow.
+Environment=AI_DASHBOARD_REPORT_ROOT=/home/ubuntu/work/bintian/slack-ads-report
+Environment=AI_DASHBOARD_ANC_TRANSPORT=local
+Environment=AI_DASHBOARD_PUBLICATION_STORE=postgres
+Environment=AI_DASHBOARD_PUBLICATION_DATABASE_CA_FILE=/etc/emw3/supabase-prod-ca-2021.crt
+Environment=NODE_ENV=production
+Environment=HOME=/home/ubuntu
+Environment=PATH=/opt/node-v24.21.0-linux-x64/bin:/usr/local/bin:/usr/bin:/bin
+# Supply the existing insight-database connection through the deployment environment.
+# AI_DASHBOARD_PUBLICATION_DATABASE_URL overrides KLAVIYO_DATABASE_URL; no value is copied here.
+EnvironmentFile=-/etc/emw3/dashboard-builder.env
+ExecStart=/usr/bin/env node --experimental-strip-types scripts/pregenerate-dashboard-overviews.ts
+TimeoutStartSec=45min
+UMask=0077
+Nice=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Start Dashboard Builder weekly preparation Tuesday 04:00 Eastern with bounded completion retries
+
+[Timer]
+OnCalendar=Tue *-*-* 04:00:00 America/New_York
+# Account-local closure remains required even after the scheduled start.
+# The idempotent publisher returns immediately once this week's snapshot exists.
+OnCalendar=Tue *-*-* 05..09:00:00 America/New_York
+Persistent=true
+AccuracySec=1min
+Unit=dashboard-builder-weekly.service
+
+[Install]
+WantedBy=timers.target
