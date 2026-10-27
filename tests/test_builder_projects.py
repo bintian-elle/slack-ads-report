@@ -28,6 +28,15 @@ class BuilderProjectTests(unittest.TestCase):
   self.assertEqual(out['status'],'unavailable');self.assertNotIn('totals',out)
   wrong=self.result('google_ads',[]);wrong['resource_id']='another-brand'
   out=m.normalize('biceek','google_ads','2026-10-13','2026-10-19',{'daily':wrong});self.assertFalse(out['complete'])
+ def test_verified_sparse_google_query_has_native_totals(self):
+  r=self.result('google_ads',[{'segments':{'date':'2026-10-26'},'metrics':{'costMicros':'3916823','impressions':'24','clicks':'10','conversions':0,'conversionsValue':0}}])
+  out=m.normalize('biceek','google_ads','2026-10-20','2026-10-26',{'daily':r})
+  self.assertAlmostEqual(out['totals']['spend'],3.916823)
+  self.assertEqual(len(out['rows']),7)
+  self.assertEqual(out['rows'][0]['spend'],0)
+  r['coverage']['complete']=False;r['status']='partial'
+  partial=m.normalize('biceek','google_ads','2026-10-20','2026-10-26',{'daily':r})
+  self.assertNotIn('totals',partial);self.assertEqual(len(partial['rows']),1)
  def test_shopify_explicit_zero_days_are_valid_and_income_is_separate(self):
   r=self.result('store',[]);r['data']={'rows':[{'day':'2026-10-13','orders':'0','total_sales':'0'},{'day':'2026-10-14','orders':'1','total_sales':'91.25'}]};r['count']=2
   out=m.normalize('biceek','store','2026-10-13','2026-10-19',{'daily':r});self.assertEqual(out['totals'],{'revenue':91.25,'conversions':1.0});self.assertEqual(out['rows'][0]['revenue'],0)

@@ -29,7 +29,7 @@ spec=json.loads(base64.b64decode(sys.argv[1]));p=spec['platform']
 allowed={'ga4':[['reports','query']],'google-ads':[['reports','query']],'meta-ads':[['insights','query']],'shopify':[['reports','query']],'klaviyo':[['reports','summary']]}
 if spec['command'] not in allowed.get(p,[]):raise ValueError('Unapproved operation')
 cli='/home/ubuntu/.agents/skills/anc-'+p+'-data-readonly/scripts/anc-'+p
-r=subprocess.run([cli]+spec['command']+['--account',spec['account'],'--input-file','-'],input=json.dumps(spec['input']),text=True,capture_output=True,timeout=135)
+r=subprocess.run([cli]+spec['command']+['--account',spec['account'],'--input-file','-'],input=json.dumps(spec['input']),text=True,capture_output=True)
 try:out=json.loads(r.stdout)
 except Exception:print(json.dumps({'status':'adapter_failed','message':'CLI did not return JSON','exitCode':r.returncode}));sys.exit(0)
 seen=set();root=pathlib.Path('/home/ubuntu/work/anc-data-tools/.local/exports').resolve()
@@ -119,7 +119,7 @@ def call(project,source,start,end,kind='daily',force=False):
  transport=os.environ.get('AI_DASHBOARD_ANC_TRANSPORT','ssh')
  if transport not in ('ssh','local'):raise ValueError('Choose the fixed ssh or local ANC transport')
  argv=[sys.executable,'-c',REMOTE,encoded] if transport=='local' else ['ssh','-o','BatchMode=yes','-o','ConnectTimeout=15',HOST,command]
- result=subprocess.run(argv,text=True,capture_output=True,timeout=160)
+ result=subprocess.run(argv,text=True,capture_output=True)
  if result.returncode:out={'status':'transport_failed','account_ref':account,'message':'Approved ANC reader was unreachable'}
  else:
   try:out=json.loads(result.stdout)
@@ -169,6 +169,15 @@ def normalize(project,source,start,end,results):
    payload.update(status='unavailable',complete=False,reason='Successful account query returned no reporting rows; spend is unavailable, not zero.');return payload
   for row in raw:
    m=row.get('metrics',{});payload['rows'].append({'date':iso(row.get('segments',{}).get('date')),'spend':num(m.get('costMicros'))/1e6 if num(m.get('costMicros')) is not None else None,'impressions':num(m.get('impressions')),'clicks':num(m.get('clicks')),'conversions':num(m.get('conversions')),'revenue':num(m.get('conversionsValue'))})
+  if complete(r):
+   fields=['spend','impressions','clicks','conversions','revenue']
+   payload['totals']={key:total(payload['rows'],key) for key in fields}
+   # Exhausted, identity-verified Google customer queries omit zero-activity days.
+   seen={row['date'] for row in payload['rows']}
+   for offset in range((date.fromisoformat(end)-date.fromisoformat(start)).days+1):
+    day=(date.fromisoformat(start)+timedelta(days=offset)).isoformat()
+    if day not in seen:payload['rows'].append({'date':day,**{key:0.0 for key in fields}})
+   payload['rows'].sort(key=lambda row:row['date'])
  elif source=='meta_ads':
   def action(row,key):return next((num(x.get('value')) for x in row.get(key,[]) if x.get('action_type')=='offsite_conversion.fb_pixel_purchase'),None)
   payload['rows']=[{'date':iso(x.get('date_start')),'spend':num(x.get('spend')),'impressions':num(x.get('impressions')),'clicks':num(x.get('clicks')),'revenue':action(x,'action_values'),'conversions':action(x,'actions')} for x in rows_of(r)]
