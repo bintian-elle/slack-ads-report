@@ -44,3 +44,12 @@ def closure_metadata(cache,end,zone):
     if not resolved_zone(zone):return {}
     closed=captured_closed_period(cache,end,zone)
     return {'periodClosed':closed,'fetchedAfterPeriodEnd':closed}
+
+
+def microsoft_reporting_credentials(report_env, website_env):
+    """Keep the existing reporting OAuth client paired with its refresh token."""
+    keys=('GOOGLE_CLIENT_ID','GOOGLE_CLIENT_SECRET','GOOGLE_REFRESH_TOKEN','BING_ADS_DEVELOPER_TOKEN')
+    # Pick one complete credential set; never mix an OAuth login client with a reporting refresh token.
+    for candidate in (report_env,website_env):
+        if all(candidate.get(key) for key in keys):return {key:candidate[key] for key in keys}
+    raise ValueError('Microsoft reporting credentials are incomplete.')

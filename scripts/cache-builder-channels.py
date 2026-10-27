@@ -5,7 +5,7 @@ from datetime import date, timedelta, datetime, time as dt_time, timezone
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from builder_cache_policy import force_refresh_requested, period_closed, reusable_cache, closure_metadata
+from builder_cache_policy import force_refresh_requested, period_closed, reusable_cache, closure_metadata, microsoft_reporting_credentials
 from dotenv import dotenv_values
 from weekly_report.sources import request, pages
 from bing_service import BingAdsService
@@ -47,7 +47,7 @@ def fetch(source,start,end):
   raw=pages(base+'/reports',headers=headers,kind='reddit',body={'data':{'starts_at':begin,'ends_at':finish,'time_zone_id':zone,'breakdowns':['DATE'],'fields':['SPEND','IMPRESSIONS','CLICKS','CONVERSION_PURCHASE_CLICKS','CONVERSION_PURCHASE_VIEWS','CONVERSION_PURCHASE_TOTAL_VALUE']}})
   return [dict(date=r['date'][:10],spend=N(r.get('spend'))/1e6,revenue=N(r.get('conversion_purchase_total_value'))/100,conversions=N(r.get('conversion_purchase_clicks'))+N(r.get('conversion_purchase_views')),impressions=N(r.get('impressions')),clicks=N(r.get('clicks'))) for r in raw],meta['data'].get('currency','USD'),zone,raw
  if source=='microsoft_ads':
-  s=BingAdsService(ENV['GOOGLE_CLIENT_ID'],ENV['GOOGLE_CLIENT_SECRET'],ENV['GOOGLE_REFRESH_TOKEN'],ENV['BING_ADS_DEVELOPER_TOKEN']);token=s._refresh_access_token();accounts=s._find_accounts(token,s._get_user_id(token));accounts=[a for a in accounts if 'bluevua' in a.get('Name','').lower()]
+  reporting=microsoft_reporting_credentials(dotenv_values(BASE/'.env'),dotenv_values(DASH/'.env.local'));s=BingAdsService(reporting['GOOGLE_CLIENT_ID'],reporting['GOOGLE_CLIENT_SECRET'],reporting['GOOGLE_REFRESH_TOKEN'],reporting['BING_ADS_DEVELOPER_TOKEN']);token=s._refresh_access_token();accounts=s._find_accounts(token,s._get_user_id(token));accounts=[a for a in accounts if 'bluevua' in a.get('Name','').lower()]
   if not accounts:raise ValueError('No verified Bluevua Microsoft account')
   if len(accounts)!=1:raise ValueError('Multiple Microsoft accounts require explicit mapping')
   account=accounts[0];out=[]

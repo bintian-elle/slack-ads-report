@@ -1,8 +1,14 @@
 import os, unittest
 from datetime import datetime,timezone
 from unittest.mock import patch
-from builder_cache_policy import period_closed,captured_closed_period,reusable_cache,force_refresh_requested,closure_metadata
+from builder_cache_policy import period_closed,captured_closed_period,reusable_cache,force_refresh_requested,closure_metadata,microsoft_reporting_credentials
 class CachePolicyTests(unittest.TestCase):
+ def test_website_login_credentials_do_not_override_microsoft_report_credentials(self):
+  report={'GOOGLE_CLIENT_ID':'report-client','GOOGLE_CLIENT_SECRET':'report-secret','GOOGLE_REFRESH_TOKEN':'report-refresh','BING_ADS_DEVELOPER_TOKEN':'report-developer'}
+  website={'GOOGLE_CLIENT_ID':'website-login-client','GOOGLE_CLIENT_SECRET':'website-login-secret'}
+  self.assertEqual(microsoft_reporting_credentials(report,website),report)
+  self.assertEqual(microsoft_reporting_credentials({},report),report)
+
  def test_monday_seven_rows_are_not_closed_even_after_tuesday_arrives(self):
   old={'status':'ready','fetchedAt':'2026-10-26T15:00:00Z'}
   now=datetime(2026,10,27,9,tzinfo=timezone.utc)
