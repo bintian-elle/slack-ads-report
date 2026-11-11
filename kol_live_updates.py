@@ -65,6 +65,7 @@ def launch_events(messages,oldest):
         if latest<oldest:continue
         draft['ad_code']=next(iter(found)) if len(found)==1 else ''
         draft['conflict']=len(found)>1
+        draft['revision']=latest
         key=(draft['platform'],draft['post_link'])
         old=result.get(key)
         if old and old.get('ad_code') and draft.get('ad_code') and old['ad_code']!=draft['ad_code']:
@@ -131,15 +132,25 @@ def enqueue_jobs(state,events,now):
             if not keys:continue
             primary=next(iter(sorted(k for k in keys if not k.startswith(('igcode:','ttcode:')))),next(iter(sorted(keys))))
             job_id=kind+'|'+primary
-            if job_id in done:continue
+            fingerprint=job_fingerprint(event)
+            if job_id in done:
+                previous=state.setdefault('completed_inputs',{}).get(job_id)
+                if previous==fingerprint:continue
+                if previous is None and event.get('revision',float(event['ts']))<=done[job_id]:
+                    state['completed_inputs'][job_id]=fingerprint;continue
+                done.pop(job_id)
             unavailable=state.setdefault('unavailable',{})
             old=unavailable.get(job_id)
             if old and all(old.get(k)==event.get(k) for k in ('post_link','ad_code','creator','platform')):continue
             if old:unavailable.pop(job_id)
             if job_id not in jobs:
                 jobs[job_id]=dict(event,kind=kind,retry_at=now,attempts=0)
-            elif not jobs[job_id].get('ad_code') and event.get('ad_code'):
-                jobs[job_id]['ad_code']=event['ad_code'];jobs[job_id]['retry_at']=now
+            elif (event.get('revision',float(event['ts']))>=jobs[job_id].get('revision',float(jobs[job_id]['ts']))
+                  and job_fingerprint(jobs[job_id])!=fingerprint):
+                jobs[job_id].update(event,retry_at=now,attempts=0)
+
+def job_fingerprint(event):
+    return json.dumps([event.get(k) for k in ('platform','creator','post_link','ad_code','conflict')],sort_keys=True)
 
 def dispatch_jobs(state,handlers,insert,save,now,on_failure=None,metric_not_before=0):
     from kol_failures import RowResult
@@ -171,6 +182,7 @@ def dispatch_jobs(state,handlers,insert,save,now,on_failure=None,metric_not_befo
                 from kol_failures import classify_exception
                 retryable,reason=classify_exception(error)
             if matches_keys(job_keys(kind,job,state.get('link_aliases')),success):
+                state.setdefault('completed_inputs',{})[key]=job_fingerprint(job)
                 completed[key]=now;jobs.pop(key,None)
             elif retryable:
                 job['attempts']=job.get('attempts',0)+1
@@ -217,9 +229,18 @@ def poll(env,output,apply):
     path=root/'live-metric-jobs.json';state=json.loads(path.read_text()) if path.exists() else {}
     if state and state.get('channel')!=env['KOL_TRACKER_SLACK_CHANNEL_ID']:raise RuntimeError('Live Slack channel changed')
     state['channel']=env['KOL_TRACKER_SLACK_CHANNEL_ID'];now=datetime.now(timezone.utc).timestamp()
-    messages,oldest=slack_snapshot(env,state,now)
+    from kol_slack_events import event_mode,event_snapshot,finish_snapshot
+    ticket=None
+    if event_mode(env) and apply:
+        messages,oldest,ticket=event_snapshot(env,state,now)
+    else:messages,oldest=slack_snapshot(env,state,now)
     messages=enrich_messages(messages,state,now,oldest)
     events=launch_events(messages,oldest);enqueue_jobs(state,events,now)
+    if ticket is not None:
+        # Enqueue durably before acknowledging the worker snapshot. A failed insert
+        # or crash later reuses these jobs; concurrent arrivals retain dirty roots.
+        if apply:save_json(path,state)
+        finish_snapshot(env,ticket)
     save_json(output/'live-launch-plan.json',{'events':events,'pending':state['jobs'],'link_errors':state.get('link_errors',{})})
     writers={'ads-meta':ads_meta,'ads-tiktok':tiktok_daily,'organic-meta':organic_meta,
              'organic-tiktok':organic_tiktok,'organic-youtube':organic_youtube}
