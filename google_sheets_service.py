@@ -489,6 +489,12 @@ class GoogleSheetsService:
         # only when the daily report is populated so future blank dates do not
         # count as zero-spend days in COUNT-based pacing calculations.
         values_by_column["D"] = build_actual_total_spend_formula(row_number, has_chatgpt=has_chatgpt)
+        # Do not rely on formulas copied from the monthly Sheet template. Some
+        # rows used an absolute D-cell reference and therefore divided revenue
+        # by another day's spend. Always bind both blended ROAS formulas to the
+        # Actual Pacing row being written.
+        values_by_column["I"] = f"=F{row_number}/D{row_number}"
+        values_by_column["J"] = f"=G{row_number}/D{row_number}"
 
         data = [
             {

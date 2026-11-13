@@ -37,4 +37,6 @@ class OctoberLayoutTests(unittest.TestCase):
         self.assertEqual(targets['AG3'],4.0)
         self.assertEqual(targets['AH3'],50.0)
         self.assertEqual(targets['AI3'],2.0)
+        self.assertEqual(targets['I3'],'=F3/D3')
+        self.assertEqual(targets['J3'],'=G3/D3')
         self.assertNotIn('AE3',targets); self.assertNotIn('AF3',targets)
