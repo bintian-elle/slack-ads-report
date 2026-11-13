@@ -1,0 +1,12 @@
+{
+  "anc_root": "/home/ubuntu/work/anc-data-tools",
+  "sheets_credentials": "/home/ubuntu/services/biceek-daily-report/credentials/google-service-account.json",
+  "spreadsheet_id": "10LqUF6xwo9Ldx82VPUfEu7wMaoXVDY8UCY657EuMi-Q",
+  "channel_id": "C0BFLLEMP2M",
+  "failure_user_id": "U0BN7GWSX0S",
+  "slack_bot_token": "SET_PRIVATELY",
+  "pacing_updates_enabled": true,
+  "ai_enabled": true,
+  "ai_python": "/home/ubuntu/work/anc-automation/.venv/bin/python",
+  "send_not_before": "2026-11-06"
+}
