@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 import threading
 import time
 from datetime import date, datetime, time as datetime_time
@@ -273,6 +274,15 @@ def sync_processed_report_to_google_sheet(processed_path: Path) -> dict:
         credentials_file=settings.google_service_account_file,
     )
     result = sheets.write_actual_pacing(report_date, metrics)
+    follower_token = os.getenv('Updated_META_Token', '').strip()
+    yesterday = datetime.now(ZoneInfo(settings.report_timezone)).date().toordinal() - 1
+    if follower_token and report_date.toordinal() == yesterday:
+        from facebook_followers_service import sync_followers
+        try:
+            current, growth = sync_followers(sheets, follower_token, report_date)
+            logging.info('Facebook followers updated: current=%s mtd_new=%s', current, growth)
+        except Exception:
+            logging.warning('Facebook follower sync unavailable; existing Sheet values retained')
     result["mtd_summary"] = sheets.read_mtd_summary(report_date)
     result["tiktok_metrics"] = sheets.read_tiktok_metrics(report_date)
     logging.info(

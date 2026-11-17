@@ -260,6 +260,13 @@ def extract_mtd_summary(rows: Sequence[Sequence[object]]) -> Dict[str, str]:
         raise LookupError('Multiple Avg Daily Revenue to Hit values found.')
     if targets:
         summary['avg_daily_revenue_to_hit'] = targets[0]
+    followers = [str(row[i + 1]).strip() for row in rows for i, value in enumerate(row)
+                 if _normalized_text(value) == 'current facebook followers'
+                 and i + 1 < len(row) and str(row[i + 1]).strip()]
+    if len(followers) > 1:
+        raise LookupError('Multiple Current Facebook Followers values found.')
+    if followers:
+        summary['current_followers'] = followers[0]
     return summary
 
 
@@ -461,7 +468,13 @@ class GoogleSheetsService:
     def read_mtd_summary(self, report_date: date) -> Dict[str, str]:
         """Read displayed MTD totals from the matching monthly pacing tab."""
         tab_name = select_budget_pacing_tab(self.list_tab_titles(), report_date)
-        return extract_mtd_summary(self._read_tab_rows(tab_name))
+        rows = self._read_tab_rows(tab_name)
+        summary = extract_mtd_summary(rows)
+        row_number = locate_actual_pacing_row(rows, report_date)
+        row = rows[row_number - 1]
+        if len(row) > 23 and str(row[23]).strip():
+            summary['daily_followers'] = str(row[23]).strip()
+        return summary
 
     def read_tiktok_metrics(self, report_date: date) -> Optional[ChannelMetrics]:
         """Read manually populated TikTok Spend/ROAS without writing the cells."""

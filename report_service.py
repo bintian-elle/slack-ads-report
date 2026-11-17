@@ -453,7 +453,10 @@ def format_slack_report(
         spend_roas_line("Shopping", "Shopping"),
         meta_line,
         spend_roas_line("Bing", "Bing"),
-        f"• *Engagement:* {engagement_text}",
+        (f"• *Engagement:* {engagement_text}" +
+         (f" | *Current Followers:* {mtd_summary['current_followers']}" +
+          (f"(+{mtd_summary['daily_followers']})" if 'daily_followers' in mtd_summary else '')
+          if mtd_summary is not None and 'current_followers' in mtd_summary else '')),
         spend_roas_line("Google DG", "Google DG"),
         tiktok_line,
         reddit_line,
