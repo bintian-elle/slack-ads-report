@@ -252,10 +252,10 @@ def extract_mtd_summary(rows: Sequence[Sequence[object]]) -> Dict[str, str]:
     if problems:
         raise LookupError("Could not uniquely locate MTD summary: " + "; ".join(problems))
     summary = {key: values[0] for key, values in matches.items()}
-    targets = [str(row[i + 1]).strip()
+    targets = [next((str(cell).strip() for cell in row[i + 1:] if str(cell).strip()), '')
                for row in rows for i, value in enumerate(row)
                if _normalized_text(value) == 'avg daily revenue to hit'
-               and i + 1 < len(row) and str(row[i + 1]).strip()]
+               and any(str(cell).strip() for cell in row[i + 1:])]
     if len(targets) > 1:
         raise LookupError('Multiple Avg Daily Revenue to Hit values found.')
     if targets:

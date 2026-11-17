@@ -7,7 +7,7 @@ from google_sheets_service import extract_mtd_summary, MTD_SUMMARY_LABELS
 class SheetRevenueTargetTests(unittest.TestCase):
     def test_reads_sheet_display_and_appends_without_recalculation(self):
         rows = [[label, '1'] for label in MTD_SUMMARY_LABELS]
-        rows.append(['Avg Daily Revenue to Hit', '$51,082.21'])
+        rows.append(['Avg Daily Revenue to Hit', '', '', '$51,082.21'])
         summary = extract_mtd_summary(rows)
         self.assertEqual(summary['avg_daily_revenue_to_hit'], '$51,082.21')
         report = format_slack_report(date(2026, 11, 16), [], mtd_summary=summary)
