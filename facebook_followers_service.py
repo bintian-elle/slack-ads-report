@@ -41,7 +41,7 @@ def sync_followers(sheets, token, report_date):
     if len(labels) != 1:
         raise ValueError('Expected one Current Facebook Followers label')
     actual_header = locate_actual_pacing_row(rows, report_date.replace(day=1)) - 2
-    if len(rows[actual_header]) <= 23 or str(rows[actual_header][23]).strip().lower() not in ('follower', 'followers', 'fb followers'):
+    if len(rows[actual_header]) <= 23 or str(rows[actual_header][23]).strip().lower() not in ('follower', 'followers', 'fb followers', 'new follower', 'new followers'):
         raise ValueError('Unexpected X column header; no follower writes made')
     row, col = labels[0]
     # Existing summary layout: adjacent value follows label, e.g. AJ:AK.
