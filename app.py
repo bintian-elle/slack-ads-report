@@ -186,10 +186,31 @@ def generate_daily_report(
     return output_path
 
 
+def notify_pipeline_failure(stage: str, affected_date: date) -> None:
+    """Send a sanitized failure notice without exposing API credentials."""
+    recipient = os.getenv('SLACK_FAILURE_USER_ID', 'U0BN7GWSX0S').strip()
+    try:
+        delivered = SlackService(settings.slack_bot_token).send_report(
+            recipient,
+            f'⚠️ Bluevua report: {stage} failed for {affected_date:%Y-%m-%d}. '
+            'Check slack-ads-report service logs. Historical refresh failures do not block the daily report.',
+        )
+        if not delivered:
+            logging.error('Slack failure notification could not be delivered')
+    except Exception:
+        logging.error('Slack failure notification could not be delivered')
+
+
 def run_automated_pipeline() -> Path:
-    """Send the daily report, then refresh delayed data from seven days ago."""
+    """Refresh history first so the daily report reads recalculated MTD totals."""
     logging.info("Starting scheduled advertising report pipeline")
     report_date, google_metrics = fetch_google_ads_metrics()
+    try:
+        refresh_historical_sheet(report_date)
+    except Exception:
+        affected_date = historical_report_date(report_date, HISTORICAL_REFRESH_AGE_DAYS)
+        logging.exception('Seven-day historical Sheet refresh failed for %s', affected_date)
+        notify_pipeline_failure('Seven-day historical Sheet refresh', affected_date)
     processed_path = generate_daily_report(
         report_date=report_date,
         metrics=google_metrics,
@@ -212,20 +233,8 @@ def run_automated_pipeline() -> Path:
         raise ValueError("No Slack channel IDs were configured.")
     slack = SlackService(settings.slack_bot_token)
     for channel_id in settings.scheduled_channel_ids:
-        slack.send_report(channel_id, report)
-
-    try:
-        refresh_historical_sheet(report_date)
-    except Exception:
-        # Slack has already been delivered. Do not retry the entire pipeline and
-        # send a duplicate message if only the historical refresh fails.
-        logging.exception(
-            "Seven-day historical Sheet refresh failed for %s",
-            historical_report_date(
-                report_date,
-                HISTORICAL_REFRESH_AGE_DAYS,
-            ),
-        )
+        if not slack.send_report(channel_id, report):
+            raise RuntimeError('Daily report Slack delivery failed')
 
     logging.info("Scheduled report pipeline completed: %s", processed_path.name)
     return processed_path
@@ -373,6 +382,7 @@ def scheduled_pipeline_loop() -> None:
                 _write_last_scheduled_date(now.date())
                 logging.info("Daily pipeline marked complete for %s", now.date())
             except Exception:
+                notify_pipeline_failure('Daily report pipeline', now.date())
                 logging.exception(
                     "Scheduled report pipeline failed; retrying in five minutes"
                 )
