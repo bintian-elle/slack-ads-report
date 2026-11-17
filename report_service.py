@@ -472,9 +472,9 @@ def format_slack_report(
                     f"{mtd_summary['avg_daily_budget_remaining']}"
                 ),
                 f"• *MTD Follower Growth:* {mtd_summary['follower_growth']}",
-                f"• *MTD Spend Pacing %:* {mtd_summary['spend_pacing']}",
+                f"• *MTD Spend Pacing:* {mtd_summary['spend_pacing']}",
                 (
-                    "• *MTD Total Revenue Pacing %:* "
+                    "• *MTD Total Revenue Pacing:* "
                     f"{mtd_summary['revenue_pacing']}"
                 ),
             ]

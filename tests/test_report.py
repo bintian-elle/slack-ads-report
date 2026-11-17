@@ -168,8 +168,8 @@ class ReportServiceTests(unittest.TestCase):
                 "• *MTD ROAS:* 3.54\n"
                 "• *Avg Daily Budget Remaining:* $5,848.27\n"
                 "• *MTD Follower Growth:* 0\n"
-                "• *MTD Spend Pacing %:* 89.77%\n"
-                "• *MTD Total Revenue Pacing %:* 86.09%"
+                "• *MTD Spend Pacing:* 89.77%\n"
+                "• *MTD Total Revenue Pacing:* 86.09%"
             )
         )
 
