@@ -479,21 +479,6 @@ def format_slack_report(
                 ),
             ]
         )
-    if mtd_summary is not None and (report_date.year, report_date.month) == (2026, 11):
-        # This is a November 2026 gauge, not the monthly pacing target.
-        needed = "N/A"
-        try:
-            revenue = Decimal(str(mtd_summary['total_revenue']).replace('$', '').replace(',', '').strip())
-            if revenue.is_finite() and revenue >= 0:
-                shortfall = max(Decimal('0'), Decimal('1000000') - revenue)
-                days_left = 30 - report_date.day
-                if shortfall == 0:
-                    needed = '$0.00'
-                elif days_left:
-                    needed = f'${shortfall / days_left:,.2f}'
-                else:
-                    needed = f'Month ended — ${shortfall:,.2f} short'
-        except ArithmeticError:
-            pass
-        lines.append(f'• *Avg Daily Sales Needed to Reach $1M (Nov):* {needed}')
+    if mtd_summary is not None and 'avg_daily_revenue_to_hit' in mtd_summary:
+        lines.append(f"• *Avg Daily Revenue to Hit:* {mtd_summary['avg_daily_revenue_to_hit']}")
     return "\n".join(lines)
